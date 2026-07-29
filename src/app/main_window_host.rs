@@ -92,7 +92,7 @@ fn win32_main_window_styles(role: WindowRole, options: &NativeWindowOptions) -> 
         style
     } else {
         let mut style = WS_POPUP | WS_CLIPCHILDREN;
-        if options.resizable && !matches!(role, WindowRole::Quick) {
+        if options.resizable {
             style |= WS_THICKFRAME;
         }
         style
@@ -145,6 +145,19 @@ mod tests {
         options.resizable = true;
         let (_ex_style, style) = win32_main_window_styles(WindowRole::Main, &options);
 
+        assert_ne!(style & WS_POPUP, 0);
+        assert_ne!(style & WS_THICKFRAME, 0);
+        assert_eq!(style & WS_CAPTION, 0);
+    }
+
+    #[test]
+    fn borderless_resizable_quick_window_keeps_noactivate_and_sizing_frame() {
+        let mut options = NativeWindowOptions::tool_window();
+        options.resizable = true;
+        let (ex_style, style) = win32_main_window_styles(WindowRole::Quick, &options);
+
+        assert_ne!(ex_style & WS_EX_NOACTIVATE, 0);
+        assert_ne!(ex_style & WS_EX_TOPMOST, 0);
         assert_ne!(style & WS_POPUP, 0);
         assert_ne!(style & WS_THICKFRAME, 0);
         assert_eq!(style & WS_CAPTION, 0);
@@ -260,7 +273,9 @@ impl NativeMainWindowHost for WindowsMainWindowHost {
                 return NativeMainWindowPresentation::Failed;
             }
 
-            let quick_options = NativeWindowOptions::tool_window();
+            let mut quick_options = NativeWindowOptions::tool_window();
+            quick_options.resizable = request.options.resizable;
+            quick_options.min_size = request.options.min_size;
             let quick = self.create_window(
                 WindowRole::Quick,
                 &title,

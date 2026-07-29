@@ -92,11 +92,15 @@ fn main_window_size_for_point(pt: POINT) -> (i32, i32) {
     (layout.win_w, layout.list_y + layout.list_h + 7)
 }
 
-fn saved_main_window_size(settings: &AppSettings) -> Option<(i32, i32)> {
-    (settings.last_window_w > 0 && settings.last_window_h > 0).then_some((
-        settings.last_window_w,
-        settings.last_window_h,
-    ))
+fn saved_window_size(settings: &AppSettings, role: WindowRole) -> Option<(i32, i32)> {
+    let (width, height) = match role {
+        WindowRole::Main => (settings.last_window_w, settings.last_window_h),
+        WindowRole::Quick => (
+            settings.last_quick_window_w,
+            settings.last_quick_window_h,
+        ),
+    };
+    (width > 0 && height > 0).then_some((width, height))
 }
 
 fn edge_preferred_position(state: &AppState) -> Option<(i32, i32)> {
@@ -125,7 +129,7 @@ unsafe fn position_window_at_restore(
         x: restore_x,
         y: restore_y,
     };
-    let (win_w, win_h) = saved_main_window_size(&state.settings)
+    let (win_w, win_h) = saved_window_size(&state.settings, state.role)
         .unwrap_or_else(|| main_window_size_for_point(anchor));
     let work = platform_monitor::nearest_work_rect_for_point(anchor);
     let monitor = platform_monitor::nearest_rect_for_point(anchor);
@@ -154,12 +158,10 @@ fn resolve_main_window_position(
     settings: &AppSettings,
     by_hotkey: bool,
     cursor: POINT,
-    restore_size: bool,
+    role: WindowRole,
 ) -> (i32, i32, i32, i32) {
     let requested = parse_main_window_pos_mode(settings.show_pos_mode.as_str());
-    let restored_size = restore_size
-        .then(|| saved_main_window_size(settings))
-        .flatten();
+    let restored_size = saved_window_size(settings, role);
     let (win_w, win_h) = restored_size.unwrap_or_else(|| main_window_size_for_point(cursor));
     let cursor_work = platform_monitor::nearest_work_rect_for_point(cursor);
     let cursor_monitor = platform_monitor::nearest_rect_for_point(cursor);
@@ -318,12 +320,8 @@ unsafe fn position_main_window_for_state(hwnd: HWND, state: &AppState, by_hotkey
             return;
         }
         let work = platform_monitor::nearest_work_rect_for_point(pt);
-        let (win_w, win_h) = if state.role == WindowRole::Main {
-            saved_main_window_size(&state.settings)
-                .unwrap_or_else(|| main_window_size_for_point(pt))
-        } else {
-            main_window_size_for_point(pt)
-        };
+        let (win_w, win_h) = saved_window_size(&state.settings, state.role)
+            .unwrap_or_else(|| main_window_size_for_point(pt));
         let x = work.left + ((work.right - work.left - win_w) / 2);
         let y = work.top + ((work.bottom - work.top - win_h) / 3);
         crate::app::set_main_window_bounds(hwnd, UiRect::new(x, y, x + win_w, y + win_h));
@@ -333,14 +331,15 @@ unsafe fn position_main_window_for_state(hwnd: HWND, state: &AppState, by_hotkey
         &state.settings,
         by_hotkey,
         pt,
-        state.role == WindowRole::Main,
+        state.role,
     );
     crate::app::set_main_window_bounds(hwnd, UiRect::new(x, y, x + win_w, y + win_h));
 }
 
 pub(crate) unsafe fn position_main_window(hwnd: HWND, settings: &AppSettings, by_hotkey: bool) {
     let pt = platform_input::cursor_pos().unwrap_or_else(|| zeroed());
-    let (x, y, win_w, win_h) = resolve_main_window_position(settings, by_hotkey, pt, true);
+    let (x, y, win_w, win_h) =
+        resolve_main_window_position(settings, by_hotkey, pt, WindowRole::Main);
     crate::app::set_main_window_bounds(hwnd, UiRect::new(x, y, x + win_w, y + win_h));
 }
 
@@ -524,20 +523,38 @@ pub(crate) unsafe fn remember_window_pos(hwnd: HWND) {
     if pst.is_null() || platform_window::is_minimized(hwnd) {
         return;
     }
-    if let Some(rc) = platform_window::window_rect(hwnd) {
-        let anchor = main_remember_window_position(MainRememberWindowPositionInput {
-            edge_auto_hide: (*pst).settings.edge_auto_hide,
-            edge_hidden: (*pst).edge_hidden,
-            edge_restore_x: (*pst).edge_restore_x,
-            edge_restore_y: (*pst).edge_restore_y,
-            window_left: rc.left,
-            window_top: rc.top,
-        });
-        (*pst).settings.last_window_x = anchor.x;
-        (*pst).settings.last_window_y = anchor.y;
-        if (*pst).role == WindowRole::Main && !(*pst).edge_hidden {
-            (*pst).settings.last_window_w = rc.right - rc.left;
-            (*pst).settings.last_window_h = rc.bottom - rc.top;
+    let Some(rc) = platform_window::window_rect(hwnd) else {
+        return;
+    };
+    let width = rc.right - rc.left;
+    let height = rc.bottom - rc.top;
+    match (*pst).role {
+        WindowRole::Main => {
+            let anchor = main_remember_window_position(MainRememberWindowPositionInput {
+                edge_auto_hide: (*pst).settings.edge_auto_hide,
+                edge_hidden: (*pst).edge_hidden,
+                edge_restore_x: (*pst).edge_restore_x,
+                edge_restore_y: (*pst).edge_restore_y,
+                window_left: rc.left,
+                window_top: rc.top,
+            });
+            (*pst).settings.last_window_x = anchor.x;
+            (*pst).settings.last_window_y = anchor.y;
+            if !(*pst).edge_hidden {
+                (*pst).settings.last_window_w = width;
+                (*pst).settings.last_window_h = height;
+            }
+        }
+        WindowRole::Quick => {
+            (*pst).settings.last_quick_window_w = width;
+            (*pst).settings.last_quick_window_h = height;
+            let main = crate::app::main_window_hwnd();
+            let main_ptr = crate::app::get_state_ptr(main);
+            if !main_ptr.is_null() {
+                (*main_ptr).settings.last_quick_window_w = width;
+                (*main_ptr).settings.last_quick_window_h = height;
+            }
+            crate::app::runtime::persist_quick_window_size(width, height);
         }
     }
 }

@@ -405,11 +405,8 @@ impl AppState {
     }
 
     pub(super) fn layout(&self) -> MainUiLayout {
-        let layout = main_layout_for_dpi(self.ui_dpi);
-        if self.role == WindowRole::Quick {
-            return layout;
-        }
-        layout.fit_to_client(self.client_size.width, self.client_size.height)
+        main_layout_for_dpi(self.ui_dpi)
+            .fit_to_client(self.client_size.width, self.client_size.height)
     }
 
     pub(super) fn quick_action_rect_slot(&self, visible_idx: i32, slot: i32) -> Option<RECT> {

@@ -11439,6 +11439,7 @@ mod tests {
             hover_title_button: "search",
             down_title_button: "",
             search_on: true,
+            quick_window: false,
             active_loading: false,
             scroll_fade_alpha: 180,
             hover_scroll: true,

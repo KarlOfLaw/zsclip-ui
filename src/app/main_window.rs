@@ -79,11 +79,6 @@ pub(super) fn main_layout_for_dpi(dpi: u32) -> MainUiLayout {
     MAIN_UI_LAYOUT.scaled(dpi.max(96))
 }
 
-fn main_window_size_for_dpi(dpi: u32) -> (i32, i32) {
-    let layout = main_layout_for_dpi(dpi);
-    (layout.win_w, layout.list_y + layout.list_h + 7)
-}
-
 pub(super) unsafe fn main_layout_for_window(hwnd: HWND) -> MainUiLayout {
     main_layout_for_dpi(main_window_layout_dpi(hwnd))
 }
@@ -163,7 +158,7 @@ pub(super) unsafe fn handle_main_window_move_completed(hwnd: HWND) {
     let ptr = get_state_ptr(hwnd);
     if !ptr.is_null() {
         ensure_main_window_size_for_monitor(hwnd, &mut *ptr);
-        if (*ptr).role == WindowRole::Main && !edge_animation_active(&*ptr) {
+        if !edge_animation_active(&*ptr) {
             remember_window_pos(hwnd);
         }
     }
@@ -267,56 +262,24 @@ unsafe fn refresh_main_window_metrics(hwnd: HWND) {
         return;
     }
     let state = &mut *ptr;
-    if state.role == WindowRole::Main {
-        refresh_main_window_layout_only(hwnd, state);
-        return;
-    }
-    if let Some(rc) = main_window_bounds(hwnd) {
-        let layout = main_layout_for_window(hwnd);
-        let win_h = layout.list_y + layout.list_h + 7;
-        set_main_window_bounds(
-            hwnd,
-            UiRect::new(rc.left, rc.top, rc.left + layout.win_w, rc.top + win_h),
-        );
-    }
     refresh_main_window_layout_only(hwnd, state);
+
 }
 
 pub(super) unsafe fn ensure_main_window_size_for_monitor(hwnd: HWND, state: &mut AppState) {
     if edge_animation_active(state) || state.edge_hidden {
         return;
     }
-    if state.role == WindowRole::Main {
+    if platform_dpi::is_per_monitor_aware() {
         let dpi = main_window_layout_dpi(hwnd).max(96);
         if state.ui_dpi != dpi {
             refresh_main_window_layout_for_monitor(hwnd, state, Some(dpi));
         }
-        return;
-    }
-    if !platform_dpi::is_per_monitor_aware() {
+    } else {
         if apply_main_system_dpi_compensation(hwnd, state) {
             return;
         }
         refresh_main_window_layout_for_monitor(hwnd, state, Some(main_window_layout_dpi(hwnd)));
-        return;
-    }
-    let dpi = main_window_layout_dpi(hwnd).max(96);
-    let (win_w, win_h) = main_window_size_for_dpi(dpi);
-    let Some(rc) = main_window_bounds(hwnd) else {
-        refresh_main_window_layout_for_monitor(hwnd, state, Some(dpi));
-        return;
-    };
-    if rc.right <= rc.left || rc.bottom <= rc.top {
-        refresh_main_window_layout_for_monitor(hwnd, state, Some(dpi));
-        return;
-    }
-    let cur_w = rc.right - rc.left;
-    let cur_h = rc.bottom - rc.top;
-    if state.ui_dpi != dpi || (cur_w - win_w).abs() > 2 || (cur_h - win_h).abs() > 2 {
-        let work = platform_monitor::nearest_work_rect_for_window(hwnd);
-        let (x, y) = clamp_window_pos_to_rect(rc.left, rc.top, (&work).into(), win_w, win_h);
-        set_main_window_bounds(hwnd, UiRect::new(x, y, x + win_w, y + win_h));
-        refresh_main_window_layout_for_monitor(hwnd, state, Some(dpi));
     }
 }
 

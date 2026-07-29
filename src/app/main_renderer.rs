@@ -45,6 +45,8 @@ pub(super) unsafe fn draw_main_paint_command(hdc: HDC, command: MainPaintCommand
 
 fn main_text_command_text(role: MainTextRole) -> &'static str {
     match role {
+        MainTextRole::WindowTitleMain => tr("剪贴板", "Clipboard"),
+        MainTextRole::WindowTitleQuick => tr("快速剪贴板", "Quick Clipboard"),
         MainTextRole::SegmentRecords => "复制记录",
         MainTextRole::SegmentPhrases => "常用短语",
         MainTextRole::EmptyLoading => tr("正在加载...", "Loading..."),
@@ -249,6 +251,7 @@ pub(super) unsafe fn paint_main_window(hwnd: HWND) {
         hover_title_button: state.hover_btn,
         down_title_button: state.down_btn,
         search_on: state.search_on,
+        quick_window: state.role == WindowRole::Quick,
         active_loading: state.active_load_state().loading,
         scroll_fade_alpha: state.scroll_fade_alpha,
         hover_scroll: state.hover_scroll,
@@ -263,6 +266,12 @@ pub(super) unsafe fn paint_main_window(hwnd: HWND) {
     for command in &render_plan.icon_commands {
         draw_main_icon_command(memdc, *command, dark);
     }
+    draw_main_text_commands(
+        memdc,
+        &render_plan.chrome_text_commands,
+        MainTextLayer::Content,
+        th,
+    );
 
     for command in &render_plan.segment_commands {
         draw_main_paint_command(memdc, *command, th);

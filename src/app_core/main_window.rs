@@ -2600,6 +2600,8 @@ pub(crate) enum MainPaintCommand {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MainTextRole {
+    WindowTitleMain,
+    WindowTitleQuick,
     SegmentRecords,
     SegmentPhrases,
     EmptyLoading,
@@ -2748,6 +2750,7 @@ pub(crate) struct MainRowContentPlan {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MainRenderPlan {
     pub(crate) chrome_commands: Vec<MainPaintCommand>,
+    pub(crate) chrome_text_commands: Vec<MainTextCommand>,
     pub(crate) title_buttons: Vec<MainTitleButtonRender>,
     pub(crate) search_rect: Option<UiRect>,
     pub(crate) search_host: MainSearchHostPlan,
@@ -2783,6 +2786,7 @@ pub(crate) struct MainRenderInput {
     pub(crate) hover_title_button: &'static str,
     pub(crate) down_title_button: &'static str,
     pub(crate) search_on: bool,
+    pub(crate) quick_window: bool,
     pub(crate) active_loading: bool,
     pub(crate) scroll_fade_alpha: u8,
     pub(crate) hover_scroll: bool,
@@ -2808,6 +2812,7 @@ impl MainRenderInput {
             hover_title_button: "",
             down_title_button: "",
             search_on: false,
+            quick_window: false,
             active_loading: false,
             scroll_fade_alpha: 0,
             hover_scroll: false,
@@ -3070,7 +3075,7 @@ impl MainUiLayout {
         scroll_y: i32,
     ) -> Option<UiRect> {
         let row = self.row_rect(visible_idx, filtered_len, scroll_y)?;
-        let size = (self.row_h * 20 / 44).max(18);
+        let size = (self.row_h * 16 / 44).max(16);
         let left_pad = (self.row_h * 12 / 44).max(12);
         let left = row.left + left_pad;
         let top = row.top + (self.row_h - size) / 2;
@@ -3223,6 +3228,16 @@ impl MainUiLayout {
         )
     }
 
+    pub(crate) fn title_text_rect(self) -> UiRect {
+        let icon = self.app_icon_rect();
+        UiRect::new(
+            icon.right + 14,
+            0,
+            self.title_button_rect("search").left - 6,
+            self.title_h,
+        )
+    }
+
     pub(crate) fn search_rect(self) -> UiRect {
         UiRect::new(
             self.search_left,
@@ -3317,10 +3332,49 @@ impl MainUiLayout {
                 }
             })
             .collect();
-        let mut chrome_commands = vec![MainPaintCommand::FillRect {
-            rect: input.client_rect,
-            fill: MainPaintFill::Theme(MainThemeRole::Background),
-        }];
+        let mut chrome_commands = vec![
+            MainPaintCommand::FillRect {
+                rect: input.client_rect,
+                fill: MainPaintFill::Theme(MainThemeRole::Background),
+            },
+            MainPaintCommand::RoundRect {
+                rect: UiRect::new(4, 3, self.win_w - 4, self.title_h - 1),
+                fill: MainPaintFill::Theme(MainThemeRole::Surface),
+                stroke: Some(MainThemeRole::Stroke),
+                radius: 10,
+            },
+        ];
+        let title_text_rect = self.title_text_rect();
+        let chrome_text_commands = if input.search_on {
+            Vec::new()
+        } else {
+            chrome_commands.push(MainPaintCommand::RoundFill {
+                rect: UiRect::new(
+                    title_text_rect.left - 8,
+                    self.title_h / 2 - 7,
+                    title_text_rect.left - 4,
+                    self.title_h / 2 + 7,
+                ),
+                fill: MainPaintFill::Theme(MainThemeRole::Accent),
+                radius: 2,
+            });
+            vec![MainTextCommand {
+                role: if input.quick_window {
+                    MainTextRole::WindowTitleQuick
+                } else {
+                    MainTextRole::WindowTitleMain
+                },
+                layer: MainTextLayer::Content,
+                rect: title_text_rect,
+                color: MainThemeRole::Text,
+                size: (self.title_h * 14 / 35).clamp(13, 17),
+                bold: true,
+                horizontal_align: HorizontalAlign::Start,
+                vertical_align: VerticalAlign::Center,
+                wrap: TextWrap::NoWrap,
+                font: MainFontRole::Display,
+            }]
+        };
         let mut icon_commands = vec![MainIconCommand {
             kind: MainIconKind::App,
             rect: self.app_icon_rect(),
@@ -3371,27 +3425,14 @@ impl MainUiLayout {
         let tab_rects = [tab0, tab1];
         let mut segment_commands = vec![MainPaintCommand::RoundRect {
             rect: segment_rect,
-            fill: MainPaintFill::Theme(MainThemeRole::Surface),
-            stroke: Some(MainThemeRole::Stroke),
-            radius: 8,
+            fill: MainPaintFill::Theme(MainThemeRole::Surface2),
+            stroke: Some(MainThemeRole::ControlStroke),
+            radius: 10,
         }];
         segment_commands.push(MainPaintCommand::RoundFill {
             rect: tab_rects[selected_tab as usize].inflate(-2, -2),
-            fill: MainPaintFill::Theme(MainThemeRole::SegmentSelected),
-            radius: 6,
-        });
-        let selected_tab_rect = tab_rects[selected_tab as usize];
-        let indicator_w = (selected_tab_rect.width() / 5).clamp(22, 40);
-        let indicator_x = selected_tab_rect.left + (selected_tab_rect.width() - indicator_w) / 2;
-        segment_commands.push(MainPaintCommand::RoundFill {
-            rect: UiRect::new(
-                indicator_x,
-                selected_tab_rect.bottom - 3,
-                indicator_x + indicator_w,
-                selected_tab_rect.bottom - 1,
-            ),
             fill: MainPaintFill::Theme(MainThemeRole::Accent),
-            radius: 1,
+            radius: 8,
         });
         if (input.hover_tab == 0 || input.hover_tab == 1) && input.hover_tab != selected_tab {
             segment_commands.push(MainPaintCommand::RoundFill {
@@ -3410,13 +3451,15 @@ impl MainUiLayout {
             role,
             layer: MainTextLayer::Content,
             rect,
-            color: if selected_tab == index || input.hover_tab == index {
+            color: if selected_tab == index {
+                MainThemeRole::OnAccent
+            } else if input.hover_tab == index {
                 MainThemeRole::Text
             } else {
                 MainThemeRole::TextMuted
             },
             size: segment_text_size,
-            bold: false,
+            bold: selected_tab == index,
             horizontal_align: HorizontalAlign::Center,
             vertical_align: VerticalAlign::Center,
             wrap: TextWrap::NoWrap,
@@ -3450,8 +3493,8 @@ impl MainUiLayout {
         chrome_commands.push(MainPaintCommand::RoundRect {
             rect: self.list_rect(),
             fill: MainPaintFill::Theme(MainThemeRole::Surface),
-            stroke: Some(MainThemeRole::Stroke),
-            radius: 12,
+            stroke: Some(MainThemeRole::ControlStroke),
+            radius: 14,
         });
 
         let mut visible_rows = Vec::new();
@@ -3624,6 +3667,7 @@ impl MainUiLayout {
 
         MainRenderPlan {
             chrome_commands,
+            chrome_text_commands,
             title_buttons,
             search_rect: input.search_on.then_some(self.search_rect()),
             search_host: self.search_host_plan(input.search_on),
@@ -4521,6 +4565,7 @@ mod tests {
             hover_title_button: "search",
             down_title_button: "close",
             search_on: true,
+            quick_window: false,
             active_loading: true,
             scroll_fade_alpha: 180,
             hover_scroll: true,
@@ -4580,7 +4625,7 @@ mod tests {
             .icon_commands
             .iter()
             .all(|command| command.rect.width() > 0 && command.rect.height() > 0));
-        assert_eq!(plan.chrome_commands.len(), 5);
+        assert_eq!(plan.chrome_commands.len(), 6);
         assert!(matches!(
             plan.chrome_commands[0],
             MainPaintCommand::FillRect {
@@ -4596,6 +4641,15 @@ mod tests {
         assert!(matches!(
             plan.chrome_commands[1],
             MainPaintCommand::RoundRect {
+                fill: MainPaintFill::Theme(MainThemeRole::Surface),
+                stroke: Some(MainThemeRole::Stroke),
+                radius: 10,
+                ..
+            }
+        ));
+        assert!(matches!(
+            plan.chrome_commands[2],
+            MainPaintCommand::RoundRect {
                 fill: MainPaintFill::Theme(MainThemeRole::ButtonHover),
                 stroke: None,
                 radius: 6,
@@ -4603,14 +4657,14 @@ mod tests {
             }
         ));
         assert!(matches!(
-            plan.chrome_commands[2],
+            plan.chrome_commands[3],
             MainPaintCommand::FillRect {
                 fill: MainPaintFill::Theme(MainThemeRole::CloseHover),
                 ..
             }
         ));
         assert!(matches!(
-            plan.chrome_commands[3],
+            plan.chrome_commands[4],
             MainPaintCommand::RoundRect {
                 fill: MainPaintFill::Theme(MainThemeRole::ControlBg),
                 stroke: Some(MainThemeRole::ControlStroke),
@@ -4619,11 +4673,11 @@ mod tests {
             }
         ));
         assert!(matches!(
-            plan.chrome_commands[4],
+            plan.chrome_commands[5],
             MainPaintCommand::RoundRect {
                 fill: MainPaintFill::Theme(MainThemeRole::Surface),
-                stroke: Some(MainThemeRole::Stroke),
-                radius: 12,
+                stroke: Some(MainThemeRole::ControlStroke),
+                radius: 14,
                 ..
             }
         ));
@@ -4644,31 +4698,19 @@ mod tests {
         assert_eq!(plan.segment_rect, layout.segment_rect());
         let (left, right) = layout.segment_rects();
         assert_eq!(plan.tab_rects, [left, right]);
-        let indicator_w = (right.width() / 5).clamp(22, 40);
-        let indicator_x = right.left + (right.width() - indicator_w) / 2;
         assert_eq!(
             plan.segment_commands,
             vec![
                 MainPaintCommand::RoundRect {
                     rect: layout.segment_rect(),
-                    fill: MainPaintFill::Theme(MainThemeRole::Surface),
-                    stroke: Some(MainThemeRole::Stroke),
-                    radius: 8,
+                    fill: MainPaintFill::Theme(MainThemeRole::Surface2),
+                    stroke: Some(MainThemeRole::ControlStroke),
+                    radius: 10,
                 },
                 MainPaintCommand::RoundFill {
                     rect: right.inflate(-2, -2),
-                    fill: MainPaintFill::Theme(MainThemeRole::SegmentSelected),
-                    radius: 6,
-                },
-                MainPaintCommand::RoundFill {
-                    rect: UiRect::new(
-                        indicator_x,
-                        right.bottom - 3,
-                        indicator_x + indicator_w,
-                        right.bottom - 1,
-                    ),
                     fill: MainPaintFill::Theme(MainThemeRole::Accent),
-                    radius: 1,
+                    radius: 8,
                 },
                 MainPaintCommand::RoundFill {
                     rect: left.inflate(-2, -2),
@@ -4701,7 +4743,7 @@ mod tests {
                 (
                     MainTextRole::SegmentPhrases,
                     right,
-                    MainThemeRole::Text,
+                    MainThemeRole::OnAccent,
                     (layout.segment_rect().height() * 13 / 30).clamp(12, 16),
                     HorizontalAlign::Center,
                     MainFontRole::Display
@@ -4723,6 +4765,7 @@ mod tests {
             .find(|row| row.rect.top >= layout.list_y + layout.list_pad)
             .expect("fully visible row");
         let row_icon = first_row.icon_rect.expect("row icon rect");
+        assert_eq!((row_icon.width(), row_icon.height()), (16, 16));
         let pin = first_row.pin_rect.expect("pin rect");
         let expected_pin_left = row_icon.left + (layout.row_h * 22 / 44).max(22);
         assert!(
@@ -4886,6 +4929,7 @@ mod tests {
             hover_title_button: "",
             down_title_button: "",
             search_on: false,
+            quick_window: false,
             active_loading: false,
             scroll_fade_alpha: 0,
             hover_scroll: false,
@@ -5680,6 +5724,7 @@ mod tests {
                 hover_title_button: "",
                 down_title_button: "",
                 search_on: false,
+                quick_window: false,
                 active_loading: false,
                 scroll_fade_alpha: 0,
                 hover_scroll: false,
@@ -5796,6 +5841,7 @@ mod tests {
             hover_title_button: "",
             down_title_button: "",
             search_on: false,
+            quick_window: false,
             active_loading: false,
             scroll_fade_alpha: 255,
             hover_scroll: false,
@@ -6028,7 +6074,20 @@ mod tests {
         assert!(plan.visible_rows.is_empty());
         assert_eq!(plan.search_rect, None);
         assert!(!plan.chrome_commands.is_empty());
+        assert_eq!(plan.chrome_text_commands.len(), 1);
+        assert_eq!(
+            plan.chrome_text_commands[0].role,
+            MainTextRole::WindowTitleMain
+        );
         assert!(!plan.text_commands.is_empty());
+
+        let mut quick_input = MainRenderInput::empty_records(client_rect);
+        quick_input.quick_window = true;
+        let quick_plan = layout.render_plan(quick_input);
+        assert_eq!(
+            quick_plan.chrome_text_commands[0].role,
+            MainTextRole::WindowTitleQuick
+        );
     }
 
     #[test]

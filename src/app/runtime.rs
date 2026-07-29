@@ -262,6 +262,16 @@ pub(crate) fn save_settings(settings: &AppSettings) {
     write_settings(&merged);
 }
 
+pub(crate) fn persist_quick_window_size(width: i32, height: i32) {
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let mut settings = load_settings();
+    settings.last_quick_window_w = width;
+    settings.last_quick_window_h = height;
+    write_settings(&settings);
+}
+
 fn write_settings(settings: &AppSettings) {
     let _ = fs::create_dir_all(data_dir());
     if let Ok(text) = serialize_settings(settings) {

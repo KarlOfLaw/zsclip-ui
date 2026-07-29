@@ -605,18 +605,16 @@ pub(super) unsafe fn handle_nchittest(hwnd: HWND, lparam: LPARAM) -> LRESULT {
     };
     platform_window::screen_to_client(hwnd, &mut pt);
 
-    if state.role == WindowRole::Main {
-        if let Some(bounds) = main_window_client_bounds(hwnd) {
-            let border = (((6 * state.ui_dpi.max(96) as i32) + 48) / 96).clamp(6, 12);
-            if let Some(hit) = main_resize_hit_test(
-                pt.x,
-                pt.y,
-                bounds.width(),
-                bounds.height(),
-                border,
-            ) {
-                return hit;
-            }
+    if let Some(bounds) = main_window_client_bounds(hwnd) {
+        let border = (((6 * state.ui_dpi.max(96) as i32) + 48) / 96).clamp(6, 12);
+        if let Some(hit) = main_resize_hit_test(
+            pt.x,
+            pt.y,
+            bounds.width(),
+            bounds.height(),
+            border,
+        ) {
+            return hit;
         }
     }
 
