@@ -1,0 +1,60 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Windows x64 portable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout ZSClip
+        uses: actions/checkout@v5
+
+      - name: Checkout the matching ZSUI revision
+        shell: pwsh
+        run: |
+          $revision = (Get-Content zsui-revision.txt -Raw).Trim()
+          git init ../zsui
+          git -C ../zsui remote add origin https://github.com/qiu7824/zsui
+          git -C ../zsui fetch --depth 1 origin $revision
+          git -C ../zsui checkout --detach FETCH_HEAD
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release EXE
+        shell: pwsh
+        run: cargo build --release --locked
+
+      - name: Create portable package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist\zsclip-windows-x64 | Out-Null
+          Copy-Item target\release\zsclip.exe dist\zsclip-windows-x64\剪贴板.exe
+          @'
+          剪贴板（Windows x64 便携版）
+
+          1. 解压整个压缩包。
+          2. 双击“剪贴板.exe”运行。
+          3. 程序数据默认保存在 EXE 同级的 data 文件夹中。
+
+          Windows SmartScreen 若提示未知发布者，是因为该文件没有商业代码签名。
+          '@ | Set-Content -Encoding UTF8 dist\zsclip-windows-x64\使用说明.txt
+          Compress-Archive `
+            -Path dist\zsclip-windows-x64\* `
+            -DestinationPath zsclip-windows-x64-portable.zip `
+            -Force
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: zsclip-windows-x64-portable
+          path: zsclip-windows-x64-portable.zip
+          if-no-files-found: error
+          retention-days: 14

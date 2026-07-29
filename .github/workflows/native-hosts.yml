@@ -1,0 +1,168 @@
+name: Native Hosts
+
+env:
+  CARGO_NET_RETRY: "10"
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/native-hosts.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "scripts/native-host-smoke-linux.sh"
+      - "scripts/native-host-smoke-macos.sh"
+      - "src/**"
+      - "docs/native-host-verification.md"
+      - "docs/ui-host-porting.md"
+      - "docs/macos-ui.md"
+  pull_request:
+    paths:
+      - ".github/workflows/native-hosts.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "scripts/native-host-smoke-linux.sh"
+      - "scripts/native-host-smoke-macos.sh"
+      - "src/**"
+      - "docs/native-host-verification.md"
+      - "docs/ui-host-porting.md"
+      - "docs/macos-ui.md"
+
+jobs:
+  macos-appkit:
+    name: macOS AppKit host
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Checkout zsui dependency
+        run: |
+          revision="$(tr -d '\r\n' < zsui-revision.txt)"
+          git init ../zsui
+          git -C ../zsui remote add origin https://github.com/qiu7824/zsui
+          git -C ../zsui fetch --depth 1 origin "$revision"
+          git -C ../zsui checkout --detach FETCH_HEAD
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check AppKit host
+        env:
+          CARGO_TERM_COLOR: never
+          RUSTFLAGS: -A warnings
+        run: |
+          set +e
+          cargo check --bin zsclip 2>&1 | tee cargo-check-macos.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            message="$(grep -n -B 3 -A 12 -E 'error(\[[A-Z0-9]+\])?:|could not compile|cannot find|mismatched types|no method named' cargo-check-macos.log | tail -n 200)"
+            if [ -z "$message" ]; then
+              message="$(tail -n 160 cargo-check-macos.log)"
+            fi
+            message="${message//'%'/'%25'}"
+            message="${message//$'\n'/'%0A'}"
+            message="${message//$'\r'/'%0D'}"
+            echo "::error title=macOS cargo check failed::$message"
+            exit "$status"
+          fi
+      - name: Check smoke script syntax
+        run: bash -n scripts/native-host-smoke-macos.sh
+      - name: Run AppKit smoke
+        env:
+          CARGO_TERM_COLOR: never
+          NATIVE_HOST_SMOKE_WAIT: "5"
+          RUSTFLAGS: -A warnings
+          ZSCLIP_NATIVE_HOST_AUTO_SMOKE: "1"
+        run: |
+          mkdir -p target/native-host-smoke/macos
+          set +e
+          bash scripts/native-host-smoke-macos.sh 2>&1 | tee target/native-host-smoke/macos/smoke.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            message="$(tail -n 180 target/native-host-smoke/macos/smoke.log)"
+            message="${message//'%'/'%25'}"
+            message="${message//$'\n'/'%0A'}"
+            message="${message//$'\r'/'%0D'}"
+            echo "::error title=macOS AppKit smoke failed::$message"
+            exit "$status"
+          fi
+      - name: Upload AppKit smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-host-smoke-macos
+          path: target/native-host-smoke/macos/
+          if-no-files-found: warn
+
+  linux-gtk:
+    name: Linux GTK host
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Checkout zsui dependency
+        run: |
+          revision="$(tr -d '\r\n' < zsui-revision.txt)"
+          git init ../zsui
+          git -C ../zsui remote add origin https://github.com/qiu7824/zsui
+          git -C ../zsui fetch --depth 1 origin "$revision"
+          git -C ../zsui checkout --detach FETCH_HEAD
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GTK smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dbus-x11 \
+            libdbus-1-dev \
+            libgtk-4-dev \
+            libx11-dev \
+            libxi-dev \
+            libxtst-dev \
+            openbox \
+            pkg-config \
+            scrot \
+            wmctrl \
+            xdotool \
+            xvfb
+      - name: Check GTK host
+        env:
+          CARGO_TERM_COLOR: never
+          RUSTFLAGS: -A warnings
+        run: |
+          set +e
+          cargo check --bin zsclip 2>&1 | tee cargo-check-linux.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            message="$(grep -n -B 3 -A 12 -E 'error(\[[A-Z0-9]+\])?:|could not compile|cannot find|mismatched types|no method named' cargo-check-linux.log | tail -n 200)"
+            if [ -z "$message" ]; then
+              message="$(tail -n 160 cargo-check-linux.log)"
+            fi
+            message="${message//'%'/'%25'}"
+            message="${message//$'\n'/'%0A'}"
+            message="${message//$'\r'/'%0D'}"
+            echo "::error title=Linux cargo check failed::$message"
+            exit "$status"
+          fi
+      - name: Check smoke script syntax
+        run: bash -n scripts/native-host-smoke-linux.sh
+      - name: Run GTK smoke under Xvfb
+        env:
+          CARGO_TERM_COLOR: never
+          NATIVE_HOST_SMOKE_WAIT: "5"
+          RUSTFLAGS: -A warnings
+          ZSCLIP_NATIVE_HOST_AUTO_SMOKE: "1"
+        run: |
+          mkdir -p target/native-host-smoke/linux
+          set +e
+          xvfb-run -a bash -c 'openbox >/tmp/zsclip-openbox.log 2>&1 & sleep 1; bash scripts/native-host-smoke-linux.sh' 2>&1 | tee target/native-host-smoke/linux/smoke.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            message="$(tail -n 180 target/native-host-smoke/linux/smoke.log)"
+            message="${message//'%'/'%25'}"
+            message="${message//$'\n'/'%0A'}"
+            message="${message//$'\r'/'%0D'}"
+            echo "::error title=Linux GTK smoke failed::$message"
+            exit "$status"
+          fi
+      - name: Upload GTK smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-host-smoke-linux
+          path: target/native-host-smoke/linux/
+          if-no-files-found: warn

@@ -1,0 +1,798 @@
+name: Release Packages
+
+env:
+  CARGO_NET_RETRY: "10"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to build"
+        required: false
+        default: "0.9.9.7"
+  push:
+    branches:
+      - main
+    tags:
+      - "0.*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows release package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Checkout zsui dependency
+        shell: pwsh
+        run: |
+          $revision = (Get-Content zsui-revision.txt -Raw).Trim()
+          git init ../zsui
+          git -C ../zsui remote add origin https://github.com/qiu7824/zsui
+          git -C ../zsui fetch --depth 1 origin $revision
+          git -C ../zsui checkout --detach FETCH_HEAD
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Windows release
+        shell: pwsh
+        run: |
+          $status = 1
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Write-Output "cargo build attempt $attempt/3"
+            cargo build --release --locked
+            $status = $LASTEXITCODE
+            if ($status -eq 0) {
+              break
+            }
+            if ($attempt -lt 3) {
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          exit $status
+      - name: Install Windows packaging tools
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Stage Windows binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist\zsclip-windows-x86_64 | Out-Null
+          New-Item -ItemType Directory -Force dist\installer-source | Out-Null
+          Copy-Item target\release\zsclip.exe dist\zsclip-windows-x86_64\剪贴板.exe
+          Copy-Item target\release\zsclip.exe dist\installer-source\剪贴板.exe
+          @'
+          剪贴板 0.9.9.7 - Windows
+
+          安装/运行:
+          1. 解压此 zip 到你要长期使用的安装目录，例如 D:\剪贴板。
+          2. 双击 剪贴板.exe 运行。
+          3. 如果 Windows SmartScreen 提示未知发布者，选择“更多信息”后继续运行。
+
+          说明:
+          - 当前包是便携版，不写注册表，不包含安装向导。
+          - 开机自启、托盘、热键等功能在应用设置里启用。
+          '@ | Set-Content -Encoding UTF8 dist\zsclip-windows-x86_64\INSTALL.txt
+          Copy-Item dist\zsclip-windows-x86_64\INSTALL.txt dist\installer-source\INSTALL.txt
+          Compress-Archive -Path dist\zsclip-windows-x86_64\* -DestinationPath dist\zsclip-windows-x86_64-portable.zip -Force
+          $installerScript = @'
+          #define MyAppName "剪贴板"
+          #define MyAppVersion "0.9.9.7"
+          #define MyAppPublisher "qiu7824"
+          #define MyAppURL "https://github.com/qiu7824/zsclip"
+          #define MyAppExeName "剪贴板.exe"
+          #define MyAppInstallDirName "剪贴板"
+          #define MyAppAutoStartValueName "ZSClip"
+          #define MySourceDir "dist\installer-source"
+          #define MyOutputDir "dist"
+          #define MySetupIcon "assets\icons\icon.ico"
+
+          [Setup]
+          AppId={{8D6C8C7D-1F0A-4E5A-9A24-7F4F5C1E9A11}
+          AppName={#MyAppName}
+          AppVersion={#MyAppVersion}
+          AppVerName={#MyAppName} {#MyAppVersion}
+          AppPublisher={#MyAppPublisher}
+          AppPublisherURL={#MyAppURL}
+          AppSupportURL={#MyAppURL}
+          AppUpdatesURL={#MyAppURL}
+          DefaultDirName={code:GetDefaultInstallDir}
+          DefaultGroupName={#MyAppName}
+          DisableProgramGroupPage=yes
+          PrivilegesRequired=admin
+          OutputDir={#MyOutputDir}
+          OutputBaseFilename=zsclip-v{#MyAppVersion}-setup
+          Compression=lzma2/max
+          SolidCompression=yes
+          WizardStyle=modern
+          UninstallDisplayName={#MyAppName}
+          UninstallDisplayIcon={app}\{#MyAppExeName}
+          SetupLogging=yes
+          ArchitecturesAllowed=x64
+          ArchitecturesInstallIn64BitMode=x64
+          CloseApplications=yes
+          CloseApplicationsFilter={#MyAppExeName}
+          RestartApplications=no
+          AppMutex=Global\ZSClipSingleInstance
+          VersionInfoVersion={#MyAppVersion}
+          VersionInfoCompany={#MyAppPublisher}
+          VersionInfoProductName={#MyAppName}
+          VersionInfoDescription={#MyAppName}
+          VersionInfoProductVersion={#MyAppVersion}
+          SetupIconFile={#MySetupIcon}
+
+          [Languages]
+          Name: "chinesesimplified"; MessagesFile: ".github\inno\ChineseSimplified.isl"
+
+          [Messages]
+          ButtonBack=< 上一步(&B)
+          ButtonNext=下一步(&N) >
+          ButtonInstall=安装(&I)
+          ButtonOK=确定
+          ButtonCancel=取消
+          ButtonYes=是(&Y)
+          ButtonNo=否(&N)
+          ButtonFinish=完成(&F)
+          ButtonBrowse=浏览(&B)...
+          ButtonWizardBrowse=浏览(&R)...
+          ClickNext=单击“下一步”继续，或单击“取消”退出安装程序。
+          WelcomeLabel1=欢迎使用 [name] 安装向导
+          WelcomeLabel2=这将在你的电脑上安装 [name/ver]。%n%n建议继续前关闭其他应用程序。
+          WizardSelectDir=选择安装位置
+          SelectDirDesc=要将 [name] 安装到哪里？
+          SelectDirLabel3=安装程序会将 [name] 安装到以下文件夹。
+          SelectDirBrowseLabel=单击“下一步”继续。如需选择其他文件夹，请单击“浏览”。
+          DiskSpaceMBLabel=至少需要 [mb] MB 可用磁盘空间。
+          DirExistsTitle=文件夹已存在
+          DirExists=文件夹：%n%n%1%n%n已经存在。是否仍安装到该文件夹？
+          DirDoesntExistTitle=文件夹不存在
+          DirDoesntExist=文件夹：%n%n%1%n%n不存在。是否创建该文件夹？
+          WizardSelectTasks=选择附加任务
+          SelectTasksDesc=要执行哪些附加任务？
+          SelectTasksLabel2=请选择安装 [name] 时要执行的附加任务，然后单击“下一步”。
+          WizardReady=准备安装
+          ReadyLabel1=安装程序已准备好开始将 [name] 安装到你的电脑。
+          ReadyLabel2a=单击“安装”继续，或单击“上一步”检查或修改设置。
+          ReadyLabel2b=单击“安装”继续。
+          ReadyMemoDir=安装位置：
+          ReadyMemoGroup=开始菜单文件夹：
+          ReadyMemoTasks=附加任务：
+          WizardPreparing=正在准备安装
+          PreparingDesc=安装程序正在准备将 [name] 安装到你的电脑。
+          WizardInstalling=正在安装
+          InstallingLabel=请稍候，安装程序正在将 [name] 安装到你的电脑。
+          FinishedHeadingLabel=[name] 安装向导完成
+          FinishedLabelNoIcons=安装程序已完成 [name] 的安装。
+          FinishedLabel=安装程序已完成 [name] 的安装。你可以通过已安装的快捷方式启动应用。
+          ClickFinish=单击“完成”退出安装程序。
+          RunEntryExec=运行 %1
+          StatusCreateDirs=正在创建目录...
+          StatusExtractFiles=正在解压文件...
+          StatusCreateIcons=正在创建快捷方式...
+          StatusCreateRegistryEntries=正在写入注册表...
+          StatusSavingUninstall=正在保存卸载信息...
+          StatusRunProgram=正在完成安装...
+
+          [Tasks]
+          Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务:"; Flags: unchecked
+          Name: "autostart"; Description: "启用开机自启"; GroupDescription: "启动选项:"; Flags: unchecked
+
+          [Files]
+          Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "\Output\*,\.git\*,\.github\*,\target\*,\__pycache__\*,\build\*,\dist\*,\installer\*,\venv\*,\.venv\*,\node_modules\*,\*.iss,*.pyc,*.pyo"
+
+          [Dirs]
+          Name: "{app}\data"
+          Name: "{app}\data\temp"
+          Name: "{app}\data\logs"
+
+          [InstallDelete]
+          Type: files; Name: "{autoprograms}\ZSClip.lnk"
+          Type: files; Name: "{autodesktop}\ZSClip.lnk"
+
+          [Icons]
+          Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+          Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+          [Registry]
+          Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppAutoStartValueName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: autostart
+          Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#MyAppAutoStartValueName}"; Flags: deletevalue; Check: ShouldDisableAutostart
+          Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#MyAppName}"; Flags: deletevalue; Check: ShouldDisableAutostart
+          Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Clipboard"; Flags: deletevalue; Check: ShouldDisableAutostart
+          Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "筑森剪贴"; Flags: deletevalue; Check: ShouldDisableAutostart
+
+          [Run]
+          Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+          [UninstallDelete]
+          Type: filesandordirs; Name: "{app}\logs"
+          Type: filesandordirs; Name: "{app}\temp"
+
+          [Code]
+          var
+            AutoStartTaskInitialized: Boolean;
+
+          function GetDefaultInstallDir(Param: string): string;
+          begin
+            if DirExists('D:\') then
+              Result := 'D:\{#MyAppInstallDirName}'
+            else if DirExists('E:\') then
+              Result := 'E:\{#MyAppInstallDirName}'
+            else if DirExists('F:\') then
+              Result := 'F:\{#MyAppInstallDirName}'
+            else
+              Result := ExpandConstant('{autopf}\{#MyAppInstallDirName}');
+          end;
+
+          function RunValuePresent(ValueName: string): Boolean;
+          var
+            Value: string;
+          begin
+            Result := RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', ValueName, Value)
+              and (Trim(Value) <> '');
+          end;
+
+          function ExistingAutostartEnabled(): Boolean;
+          begin
+            Result :=
+              RunValuePresent('{#MyAppAutoStartValueName}') or
+              RunValuePresent('{#MyAppName}') or
+              RunValuePresent('Clipboard') or
+              RunValuePresent('筑森剪贴');
+          end;
+
+          function ShouldDisableAutostart(): Boolean;
+          begin
+            Result := not WizardIsTaskSelected('autostart');
+          end;
+
+          function FindTaskByCaption(Caption: string): Integer;
+          var
+            I: Integer;
+          begin
+            Result := -1;
+            for I := 0 to WizardForm.TasksList.Items.Count - 1 do
+            begin
+              if WizardForm.TasksList.ItemCaption[I] = Caption then
+              begin
+                Result := I;
+                Exit;
+              end;
+            end;
+          end;
+
+          procedure CurPageChanged(CurPageID: Integer);
+          var
+            TaskIndex: Integer;
+          begin
+            if (CurPageID = wpSelectTasks) and (not AutoStartTaskInitialized) then
+            begin
+              TaskIndex := FindTaskByCaption('启用开机自启');
+              if TaskIndex >= 0 then
+                WizardForm.TasksList.Checked[TaskIndex] := ExistingAutostartEnabled();
+              AutoStartTaskInitialized := True;
+            end;
+          end;
+          '@
+          [System.IO.File]::WriteAllText((Resolve-Path .).Path + '\installer.iss', $installerScript, [System.Text.UTF8Encoding]::new($true))
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss 2>&1 | Tee-Object -FilePath inno-build.log
+          if ($LASTEXITCODE -ne 0) {
+            $message = (Get-Content inno-build.log -Tail 120) -join "`n"
+            $message = $message.Replace('%', '%25').Replace("`n", '%0A').Replace("`r", '%0D')
+            Write-Output "::error title=Windows installer build failed::$message"
+            exit $LASTEXITCODE
+          }
+          $status = 1
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Write-Output "cargo build no-lan attempt $attempt/3"
+            cargo build --release --locked --no-default-features --features "vv-paste,cloud-sync,mail-merge,ai-actions,sticker"
+            $status = $LASTEXITCODE
+            if ($status -eq 0) {
+              break
+            }
+            if ($attempt -lt 3) {
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          if ($status -ne 0) {
+            exit $status
+          }
+          New-Item -ItemType Directory -Force dist\installer-source-no-lan | Out-Null
+          New-Item -ItemType Directory -Force dist\zsclip-windows-x86_64-no-lan | Out-Null
+          Copy-Item target\release\zsclip.exe dist\installer-source-no-lan\剪贴板.exe -Force
+          Copy-Item dist\installer-source\INSTALL.txt dist\installer-source-no-lan\INSTALL.txt -Force
+          Copy-Item target\release\zsclip.exe dist\zsclip-windows-x86_64-no-lan\剪贴板.exe -Force
+          @'
+          剪贴板 0.9.9.7 - Windows 无局域网同步便携版
+
+          安装/运行:
+          1. 解压此 zip 到你要长期使用的安装目录，例如 D:\剪贴板。
+          2. 双击 剪贴板.exe 运行。
+          3. 如果 Windows SmartScreen 提示未知发布者，选择“更多信息”后继续运行。
+
+          说明:
+          - 当前包是便携版，不写注册表，不包含安装向导。
+          - 此包不包含局域网同步功能，适合不需要扫码绑定/局域网发现的环境。
+          - 开机自启、托盘、热键等功能在应用设置里启用。
+          '@ | Set-Content -Encoding UTF8 dist\zsclip-windows-x86_64-no-lan\INSTALL.txt
+          Compress-Archive -Path dist\zsclip-windows-x86_64-no-lan\* -DestinationPath dist\zsclip-windows-x86_64-no-lan-portable.zip -Force
+          $noLanInstaller = (Get-Content installer.iss -Raw).
+            Replace('#define MySourceDir "dist\installer-source"', '#define MySourceDir "dist\installer-source-no-lan"').
+            Replace('OutputBaseFilename=zsclip-v{#MyAppVersion}-setup', 'OutputBaseFilename=zsclip-v{#MyAppVersion}-setup-no-lan').
+            Replace('AppVerName={#MyAppName} {#MyAppVersion}', 'AppVerName={#MyAppName} {#MyAppVersion} 无局域网同步').
+            Replace('VersionInfoDescription={#MyAppName}', 'VersionInfoDescription={#MyAppName} 无局域网同步')
+          [System.IO.File]::WriteAllText((Resolve-Path .).Path + '\installer-no-lan.iss', $noLanInstaller, [System.Text.UTF8Encoding]::new($true))
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer-no-lan.iss 2>&1 | Tee-Object -FilePath inno-build-no-lan.log
+          if ($LASTEXITCODE -ne 0) {
+            $message = (Get-Content inno-build-no-lan.log -Tail 120) -join "`n"
+            $message = $message.Replace('%', '%25').Replace("`n", '%0A').Replace("`r", '%0D')
+            Write-Output "::error title=Windows no-lan installer build failed::$message"
+            exit $LASTEXITCODE
+          }
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: zsclip-v0.9.9.7-setup.exe
+          path: dist/zsclip-v0.9.9.7-setup.exe
+          if-no-files-found: error
+      - name: Upload Windows no-lan installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: zsclip-v0.9.9.7-setup-no-lan.exe
+          path: dist/zsclip-v0.9.9.7-setup-no-lan.exe
+          if-no-files-found: error
+      - name: Upload Windows portable package
+        uses: actions/upload-artifact@v7
+        with:
+          name: zsclip-windows-x86_64-portable.zip
+          path: dist/zsclip-windows-x86_64-portable.zip
+          if-no-files-found: error
+      - name: Upload Windows no-lan portable package
+        uses: actions/upload-artifact@v7
+        with:
+          name: zsclip-windows-x86_64-no-lan-portable.zip
+          path: dist/zsclip-windows-x86_64-no-lan-portable.zip
+          if-no-files-found: error
+      - name: Package resource bundle
+        shell: pwsh
+        run: |
+          $resourceRoot = "dist\zsclip-v0.9.9.7-resources"
+          if (Test-Path $resourceRoot) {
+            Remove-Item -LiteralPath $resourceRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force $resourceRoot | Out-Null
+          foreach ($dir in @("assets", "docs", "locales", "integrations")) {
+            if (Test-Path $dir) {
+              Copy-Item -Path $dir -Destination $resourceRoot -Recurse -Force
+            }
+          }
+          foreach ($file in @("README.md", "README.en.md", "LICENSE", "Cargo.toml", "Cargo.lock")) {
+            if (Test-Path $file) {
+              Copy-Item -Path $file -Destination $resourceRoot -Force
+            }
+          }
+          Compress-Archive -Path "$resourceRoot\*" -DestinationPath "dist\zsclip-v0.9.9.7-resources.zip" -Force
+      - name: Upload resource bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: zsclip-v0.9.9.7-resources.zip
+          path: dist/zsclip-v0.9.9.7-resources.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS release package (${{ matrix.asset_arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            asset_arch: x86_64
+            display_arch: Intel
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            asset_arch: arm64
+            display_arch: Apple Silicon
+    steps:
+      - uses: actions/checkout@v5
+      - name: Checkout zsui dependency
+        run: |
+          revision="$(tr -d '\r\n' < zsui-revision.txt)"
+          git init ../zsui
+          git -C ../zsui remote add origin https://github.com/qiu7824/zsui
+          git -C ../zsui fetch --depth 1 origin "$revision"
+          git -C ../zsui checkout --detach FETCH_HEAD
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build macOS release
+        env:
+          CARGO_TERM_COLOR: never
+          RUSTFLAGS: -A warnings
+        run: |
+          set +e
+          status=1
+          for attempt in 1 2 3; do
+            echo "cargo build attempt $attempt/3"
+            cargo build --release --locked --target "${{ matrix.target }}" 2>&1 | tee cargo-build-macos.log
+            status=${PIPESTATUS[0]}
+            if [ "$status" -eq 0 ]; then
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 10))
+            fi
+          done
+          if [ "$status" -ne 0 ]; then
+            message="$(grep -n -B 3 -A 12 -E 'error(\[[A-Z0-9]+\])?:|could not compile|cannot find|mismatched types|no method named' cargo-build-macos.log | tail -n 200)"
+            if [ -z "$message" ]; then
+              message="$(tail -n 160 cargo-build-macos.log)"
+            fi
+            message="${message//'%'/'%25'}"
+            message="${message//$'\n'/'%0A'}"
+            message="${message//$'\r'/'%0D'}"
+            echo "::error title=macOS cargo build failed::$message"
+            exit "$status"
+          fi
+      - name: Stage macOS binary
+        run: |
+          mkdir -p dist
+          mkdir -p dist/ZSClip.app/Contents/MacOS
+          mkdir -p dist/ZSClip.app/Contents/Resources
+          cp target/${{ matrix.target }}/release/zsclip dist/ZSClip.app/Contents/MacOS/zsclip
+          chmod +x dist/ZSClip.app/Contents/MacOS/zsclip
+          mkdir -p dist/AppIcon.iconset
+          for size in 16 32 128 256 512; do
+            sips -z "$size" "$size" assets/icons/text/text_256x256.png --out "dist/AppIcon.iconset/icon_${size}x${size}.png" >/dev/null
+            double_size=$((size * 2))
+            sips -z "$double_size" "$double_size" assets/icons/text/text_256x256.png --out "dist/AppIcon.iconset/icon_${size}x${size}@2x.png" >/dev/null
+          done
+          iconutil -c icns dist/AppIcon.iconset -o dist/ZSClip.app/Contents/Resources/AppIcon.icns
+          cat > dist/ZSClip.app/Contents/Info.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>zsclip</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.zsclip.app</string>
+            <key>CFBundleName</key>
+            <string>ZSClip</string>
+            <key>CFBundleDisplayName</key>
+            <string>ZSClip</string>
+            <key>CFBundleIconFile</key>
+            <string>AppIcon</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>0.9.9.7</string>
+            <key>CFBundleVersion</key>
+            <string>0.9.9.7</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+          codesign --force --deep --sign - dist/ZSClip.app
+          codesign --verify --deep --strict dist/ZSClip.app
+          mkdir -p dist/dmg-root
+          cp -R dist/ZSClip.app dist/dmg-root/ZSClip.app
+          ln -s /Applications dist/dmg-root/Applications
+          cat > dist/dmg-root/INSTALL.txt <<'TXT'
+          ZSClip 0.9.9.7 - macOS ${{ matrix.display_arch }}
+
+          安装/运行:
+          1. 打开 DMG。
+          2. 将 ZSClip.app 拖到 Applications/应用程序。
+          3. 首次运行如果提示无法验证开发者，请右键 ZSClip.app 选择“打开”。
+
+          说明:
+          - 当前包使用 ad-hoc 本地签名，未使用 Apple Developer ID 签名，也未公证。
+          - 如果测试系统仍提示“已损坏”，请确认下载来源是 GitHub Release；必要时可在终端执行:
+            xattr -dr com.apple.quarantine /Applications/ZSClip.app
+          - 全局热键、VV 粘贴等系统级能力可能需要在“系统设置 -> 隐私与安全性”里授权辅助功能/输入监控。
+          TXT
+          hdiutil create -volname "ZSClip 0.9.9.7 ${{ matrix.asset_arch }}" -srcfolder dist/dmg-root -ov -format UDZO dist/zsclip-macos-${{ matrix.asset_arch }}.dmg
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: zsclip-macos-${{ matrix.asset_arch }}.dmg
+          path: dist/zsclip-macos-${{ matrix.asset_arch }}.dmg
+          if-no-files-found: error
+
+  linux:
+    name: Linux release package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Checkout zsui dependency
+        run: |
+          revision="$(tr -d '\r\n' < zsui-revision.txt)"
+          git init ../zsui
+          git -C ../zsui remote add origin https://github.com/qiu7824/zsui
+          git -C ../zsui fetch --depth 1 origin "$revision"
+          git -C ../zsui checkout --detach FETCH_HEAD
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dbus-x11 \
+            libdbus-1-dev \
+            libgtk-4-dev \
+            libx11-dev \
+            libxi-dev \
+            libxtst-dev \
+            pkg-config
+      - name: Build Linux release
+        env:
+          CARGO_TERM_COLOR: never
+          RUSTFLAGS: -A warnings
+        run: |
+          set +e
+          status=1
+          for attempt in 1 2 3; do
+            echo "cargo build attempt $attempt/3"
+            cargo build --release --locked 2>&1 | tee cargo-build-linux.log
+            status=${PIPESTATUS[0]}
+            if [ "$status" -eq 0 ]; then
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $((attempt * 10))
+            fi
+          done
+          if [ "$status" -ne 0 ]; then
+            message="$(grep -n -B 3 -A 12 -E 'error(\[[A-Z0-9]+\])?:|could not compile|cannot find|mismatched types|no method named' cargo-build-linux.log | tail -n 200)"
+            if [ -z "$message" ]; then
+              message="$(tail -n 160 cargo-build-linux.log)"
+            fi
+            message="${message//'%'/'%25'}"
+            message="${message//$'\n'/'%0A'}"
+            message="${message//$'\r'/'%0D'}"
+            echo "::error title=Linux cargo build failed::$message"
+            exit "$status"
+          fi
+      - name: Stage Linux binary
+        run: |
+          mkdir -p dist
+          mkdir -p dist/zsclip-linux-x86_64/bin
+          mkdir -p dist/zsclip-linux-x86_64/share/applications
+          cp target/release/zsclip dist/zsclip-linux-x86_64/bin/zsclip
+          chmod +x dist/zsclip-linux-x86_64/bin/zsclip
+          cat > dist/zsclip-linux-x86_64/share/applications/zsclip.desktop <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=ZSClip
+          Exec=zsclip
+          Terminal=false
+          Categories=Utility;
+          DESKTOP
+          cat > dist/zsclip-linux-x86_64/INSTALL.txt <<'TXT'
+          ZSClip 0.9.9.7 - Linux x86_64
+
+          安装/运行:
+          1. 解压: tar -xzf zsclip-linux-x86_64.tar.gz
+          2. 进入目录: cd zsclip-linux-x86_64
+          3. 运行: ./bin/zsclip
+
+          Ubuntu/Debian 运行依赖示例:
+          sudo apt install libgtk-4-1 libx11-6 libxi6 libxtst6 dbus-x11
+
+          说明:
+          - 当前包是便携 tar.gz，不是 deb/AppImage。
+          - 托盘、全局热键、VV 粘贴在 Wayland/X11 下可能需要对应桌面环境权限或工具支持。
+          TXT
+          tar -czf dist/zsclip-linux-x86_64.tar.gz -C dist zsclip-linux-x86_64
+          mkdir -p dist/deb/DEBIAN
+          mkdir -p dist/deb/usr/bin
+          mkdir -p dist/deb/usr/share/applications
+          cp target/release/zsclip dist/deb/usr/bin/zsclip
+          chmod +x dist/deb/usr/bin/zsclip
+          cp dist/zsclip-linux-x86_64/share/applications/zsclip.desktop dist/deb/usr/share/applications/zsclip.desktop
+          cat > dist/deb/DEBIAN/control <<'CONTROL'
+          Package: zsclip
+          Version: 0.9.9.7
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Depends: libgtk-4-1, libx11-6, libxi6, libxtst6, dbus-x11
+          Maintainer: ZSClip
+          Description: Native clipboard manager with sync features.
+          CONTROL
+          dpkg-deb --build dist/deb dist/zsclip-linux-x86_64.deb
+      - name: Upload Linux deb package
+        uses: actions/upload-artifact@v7
+        with:
+          name: zsclip-linux-x86_64.deb
+          path: dist/zsclip-linux-x86_64.deb
+          if-no-files-found: error
+      - name: Upload Linux portable package
+        uses: actions/upload-artifact@v7
+        with:
+          name: zsclip-linux-x86_64.tar.gz
+          path: dist/zsclip-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  android:
+    name: Android test APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+      - name: Build Android debug APK
+        working-directory: mobile/android
+        run: gradle assembleDebug
+      - name: Stage Android test APK
+        run: |
+          mkdir -p dist
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk dist/zsclip-android-test.apk
+      - name: Upload Android test APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: zsclip-android-test.apk
+          path: dist/zsclip-android-test.apk
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - windows
+      - macos
+      - linux
+      - android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@v7
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Upload packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set +e
+          cat > release-notes.md <<'NOTES'
+          # ZSClip 0.9.9.7
+
+          ## 更新内容
+          - 贴图窗口会记住最后一次拖动位置和缩放比例，后续贴图沿用该布局。
+          - 移除贴图窗口中的图片转文字及文字选择控件，保留独立的图片 OCR 功能。
+          - 优化窗口隐藏后的缓存回收和再次显示流程，减少偶发空白与弹出迟缓。
+          - 增强 Telegram Desktop 输入目标识别，提高 VV 模式触发稳定性。
+          - 扩大悬停文本预览容量，可显示更多文本、Markdown 和文件条目。
+
+          ## 下载与安装
+          - Windows: 普通用户下载 `zsclip-v0.9.9.7-setup.exe` 安装；不需要局域网同步/扫码绑定功能可下载 `zsclip-v0.9.9.7-setup-no-lan.exe`；需要便携版则下载 `zsclip-windows-x86_64-portable.zip`；需要无局域网同步便携版则下载 `zsclip-windows-x86_64-no-lan-portable.zip`。
+          - Android 测试包: 下载 `zsclip-android-test.apk`。
+          - macOS 测试包: Apple Silicon 下载 `zsclip-macos-arm64.dmg`，Intel 下载 `zsclip-macos-x86_64.dmg`。
+          - Linux 测试包: Debian/Ubuntu 可试用 `zsclip-linux-x86_64.deb`，其他发行版可下载 `zsclip-linux-x86_64.tar.gz`。
+
+          ## 注意
+          - Windows 同时提供完整安装器、无局域网同步安装器、便携包和无局域网同步便携包。
+          - macOS/Linux 当前仍是测试包，未完成正式验收前不要按 Windows 正式版标准承诺稳定性。
+          NOTES
+          ls -lah release-assets
+          gh release delete "$TAG_NAME" --repo "$GH_REPO" -y >/dev/null 2>&1 || true
+          for stale in \
+            zsclip-linux-x86_64 \
+            zsclip-linux-x86_64.tar.gz \
+            zsclip-linux-x86_64.deb \
+            zsclip-macos \
+            zsclip-macos-app.zip \
+            zsclip-macos.dmg \
+            zsclip-macos-arm64.dmg \
+            zsclip-macos-x86_64.dmg \
+            zsclip-android-test.apk \
+            zsclip-windows-x86_64.exe \
+            zsclip-windows-x86_64.zip \
+            zsclip-windows-x86_64-portable.zip \
+            zsclip-windows-x86_64-no-lan-portable.zip \
+            zsclip-windows-x86_64-setup.exe \
+            zsclip-v0.9.9.7-setup.exe \
+            zsclip-v0.9.9.7-setup-no-lan.exe \
+            zsclip-v0.9.9.7-resources.zip
+          do
+            gh release delete-asset "$TAG_NAME" "$stale" --repo "$GH_REPO" -y >/dev/null 2>&1 || true
+          done
+          if gh release view "$TAG_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" \
+              release-assets/zsclip-v0.9.9.7-setup.exe \
+              release-assets/zsclip-v0.9.9.7-setup-no-lan.exe \
+              release-assets/zsclip-windows-x86_64-portable.zip \
+              release-assets/zsclip-windows-x86_64-no-lan-portable.zip \
+              release-assets/zsclip-v0.9.9.7-resources.zip \
+              release-assets/zsclip-android-test.apk \
+              release-assets/zsclip-macos-arm64.dmg \
+              release-assets/zsclip-macos-x86_64.dmg \
+              release-assets/zsclip-linux-x86_64.deb \
+              release-assets/zsclip-linux-x86_64.tar.gz \
+              --repo "$GH_REPO" \
+              --clobber 2>&1 | tee release-upload.log
+            status=${PIPESTATUS[0]}
+            if [ "$status" -eq 0 ]; then
+              gh release edit "$TAG_NAME" --repo "$GH_REPO" --target "$GITHUB_SHA" --notes-file release-notes.md 2>&1 | tee -a release-upload.log
+              status=${PIPESTATUS[0]}
+            fi
+          else
+            gh release create "$TAG_NAME" \
+              release-assets/zsclip-v0.9.9.7-setup.exe \
+              release-assets/zsclip-v0.9.9.7-setup-no-lan.exe \
+              release-assets/zsclip-windows-x86_64-portable.zip \
+              release-assets/zsclip-windows-x86_64-no-lan-portable.zip \
+              release-assets/zsclip-v0.9.9.7-resources.zip \
+              release-assets/zsclip-android-test.apk \
+              release-assets/zsclip-macos-arm64.dmg \
+              release-assets/zsclip-macos-x86_64.dmg \
+              release-assets/zsclip-linux-x86_64.deb \
+              release-assets/zsclip-linux-x86_64.tar.gz \
+              --repo "$GH_REPO" \
+              --target "$GITHUB_SHA" \
+              --title "ZSClip $TAG_NAME" \
+              --notes-file release-notes.md 2>&1 | tee release-upload.log
+            status=${PIPESTATUS[0]}
+          fi
+          if [ "$status" -ne 0 ]; then
+            message="$(tail -n 160 release-upload.log)"
+            message="${message//'%'/'%25'}"
+            message="${message//$'\n'/'%0A'}"
+            message="${message//$'\r'/'%0D'}"
+            echo "::error title=GitHub release upload failed::$message"
+            exit "$status"
+          fi
+          gh release view "$TAG_NAME" --repo "$GH_REPO" --json tagName,targetCommitish,assets --jq '.tagName + " " + (.targetCommitish // "") + "\n" + (.assets[].name)' | tee release-verify.log
+          for required in \
+            zsclip-v0.9.9.7-setup.exe \
+            zsclip-v0.9.9.7-setup-no-lan.exe \
+            zsclip-windows-x86_64-portable.zip \
+            zsclip-windows-x86_64-no-lan-portable.zip \
+            zsclip-v0.9.9.7-resources.zip \
+            zsclip-android-test.apk \
+            zsclip-macos-arm64.dmg \
+            zsclip-macos-x86_64.dmg \
+            zsclip-linux-x86_64.deb \
+            zsclip-linux-x86_64.tar.gz
+          do
+            if ! grep -Fx "$required" release-verify.log >/dev/null; then
+              echo "::error title=GitHub release verification failed::Missing release asset $required"
+              exit 1
+            fi
+          done
+          for required in \
+            zsclip-v0.9.9.7-setup.exe \
+            zsclip-v0.9.9.7-setup-no-lan.exe \
+            zsclip-windows-x86_64-portable.zip \
+            zsclip-windows-x86_64-no-lan-portable.zip \
+            zsclip-v0.9.9.7-resources.zip \
+            zsclip-android-test.apk \
+            zsclip-macos-arm64.dmg \
+            zsclip-macos-x86_64.dmg \
+            zsclip-linux-x86_64.deb \
+            zsclip-linux-x86_64.tar.gz
+          do
+            url="https://github.com/${GH_REPO}/releases/download/${TAG_NAME}/${required}"
+            code="000"
+            for attempt in 1 2 3 4 5 6; do
+              code="$(curl -I -L -s -o /dev/null -w '%{http_code}' "$url")"
+              if [ "$code" = "200" ]; then
+                break
+              fi
+              sleep 10
+            done
+            if [ "$code" != "200" ]; then
+              echo "::error title=GitHub release public download failed::${required} returned HTTP ${code}"
+              exit 1
+            fi
+          done

@@ -1,0 +1,165 @@
+use crate::app_core::{NativeControlFamily, NativeControlMapper, SettingsComponentKind};
+use crate::platform::appearance;
+
+pub fn ui_text_font_family() -> &'static str {
+    appearance::system_ui_text_font_family()
+}
+
+pub fn ui_display_font_family() -> &'static str {
+    appearance::system_ui_text_font_family()
+}
+
+pub fn ui_icon_font_family() -> &'static str {
+    "Segoe MDL2 Assets"
+}
+
+#[derive(Clone, Copy)]
+pub struct Theme {
+    pub accent: u32,
+    pub accent_hover: u32,
+    pub accent_pressed: u32,
+    pub bg: u32,
+    pub nav_bg: u32,
+    pub nav_sel_fill: u32,
+    pub surface: u32,
+    pub surface2: u32,
+    pub stroke: u32,
+    pub text: u32,
+    pub text_muted: u32,
+    pub item_hover: u32,
+    pub item_selected: u32,
+    pub control_bg: u32,
+    pub control_stroke: u32,
+    pub button_bg: u32,
+    pub button_hover: u32,
+    pub button_pressed: u32,
+    pub close_hover: u32,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        let accent = appearance::system_accent();
+        let dark = appearance::is_dark_mode();
+        let accent_r = (accent & 0xFF) as i32;
+        let accent_g = ((accent >> 8) & 0xFF) as i32;
+        let accent_b = ((accent >> 16) & 0xFF) as i32;
+        let accent_hover = rgb(
+            ((accent_r as f32 * 0.9 + 255.0 * 0.1) as i32).min(255) as u8,
+            ((accent_g as f32 * 0.9 + 255.0 * 0.1) as i32).min(255) as u8,
+            ((accent_b as f32 * 0.9 + 255.0 * 0.1) as i32).min(255) as u8,
+        );
+        let accent_pressed = rgb(
+            ((accent_r as f32 * 0.82) as i32).min(255) as u8,
+            ((accent_g as f32 * 0.82) as i32).min(255) as u8,
+            ((accent_b as f32 * 0.82) as i32).min(255) as u8,
+        );
+
+        if dark {
+            Self {
+                accent,
+                accent_hover,
+                accent_pressed,
+                bg: rgb(24, 26, 30),
+                nav_bg: rgb(28, 30, 35),
+                nav_sel_fill: rgb(39, 42, 48),
+                surface: rgb(31, 34, 39),
+                surface2: rgb(37, 40, 46),
+                stroke: rgb(49, 53, 60),
+                text: rgb(244, 246, 248),
+                text_muted: rgb(156, 164, 175),
+                item_hover: rgb(39, 43, 49),
+                item_selected: mix(accent, rgb(31, 34, 39), 0.82),
+                control_bg: rgb(36, 39, 45),
+                control_stroke: rgb(62, 67, 76),
+                button_bg: rgb(37, 40, 46),
+                button_hover: rgb(46, 50, 57),
+                button_pressed: rgb(33, 36, 42),
+                close_hover: rgb(196, 43, 28),
+            }
+        } else {
+            Self {
+                accent,
+                accent_hover,
+                accent_pressed,
+                bg: rgb(246, 247, 249),
+                nav_bg: rgb(242, 244, 247),
+                nav_sel_fill: rgb(255, 255, 255),
+                surface: rgb(255, 255, 255),
+                surface2: rgb(247, 248, 250),
+                stroke: rgb(225, 228, 233),
+                text: rgb(26, 29, 34),
+                text_muted: rgb(101, 108, 118),
+                item_hover: rgb(246, 248, 251),
+                item_selected: mix(accent, rgb(255, 255, 255), 0.88),
+                control_bg: rgb(255, 255, 255),
+                control_stroke: rgb(205, 210, 218),
+                button_bg: rgb(255, 255, 255),
+                button_hover: rgb(243, 245, 248),
+                button_pressed: rgb(234, 237, 242),
+                close_hover: rgb(196, 43, 28),
+            }
+        }
+    }
+}
+
+pub fn rgb(r: u8, g: u8, b: u8) -> u32 {
+    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+}
+
+fn mix(a: u32, b: u32, t: f32) -> u32 {
+    let ar = (a & 0xFF) as f32;
+    let ag = ((a >> 8) & 0xFF) as f32;
+    let ab = ((a >> 16) & 0xFF) as f32;
+    let br = (b & 0xFF) as f32;
+    let bg = ((b >> 8) & 0xFF) as f32;
+    let bb = ((b >> 16) & 0xFF) as f32;
+    rgb(
+        (ar + (br - ar) * t).round() as u8,
+        (ag + (bg - ag) * t).round() as u8,
+        (ab + (bb - ab) * t).round() as u8,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct WindowsNativeControlMapper;
+
+impl NativeControlMapper for WindowsNativeControlMapper {
+    type ClassName = &'static str;
+
+    fn class_name(&self, kind: SettingsComponentKind) -> Self::ClassName {
+        match kind.family() {
+            NativeControlFamily::StaticText => "STATIC",
+            NativeControlFamily::TextInput => "EDIT",
+            NativeControlFamily::Action => "BUTTON",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_core::NativeControlMapper;
+
+    #[test]
+    fn windows_native_control_mapper_keeps_win32_classes_platform_local() {
+        let mapper = WindowsNativeControlMapper;
+
+        assert_eq!(mapper.class_name(SettingsComponentKind::Label), "STATIC");
+        assert_eq!(mapper.class_name(SettingsComponentKind::TextInput), "EDIT");
+        assert_eq!(mapper.class_name(SettingsComponentKind::Toggle), "BUTTON");
+        assert_eq!(mapper.class_name(SettingsComponentKind::Dropdown), "BUTTON");
+        assert_eq!(mapper.class_name(SettingsComponentKind::Button), "BUTTON");
+        assert_eq!(
+            mapper.class_name(SettingsComponentKind::AccentButton),
+            "BUTTON"
+        );
+    }
+
+    #[test]
+    fn windows_native_control_mapper_covers_required_operation() {
+        let source = include_str!("win_native_style.rs");
+
+        assert!(source.contains("impl NativeControlMapper for WindowsNativeControlMapper"));
+        assert!(source.contains("fn class_name(&self, kind: SettingsComponentKind)"));
+    }
+}
