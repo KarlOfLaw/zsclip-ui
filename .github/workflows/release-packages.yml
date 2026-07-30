@@ -38,9 +38,13 @@ jobs:
         shell: pwsh
         run: |
           $status = 1
+          $logPath = "cargo-build-windows.log"
+          if (Test-Path $logPath) {
+            Remove-Item $logPath -Force
+          }
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             Write-Output "cargo build attempt $attempt/3"
-            cargo build --release --locked
+            cargo build --release --locked 2>&1 | Tee-Object -FilePath $logPath -Append
             $status = $LASTEXITCODE
             if ($status -eq 0) {
               break
@@ -49,7 +53,24 @@ jobs:
               Start-Sleep -Seconds (10 * $attempt)
             }
           }
+          if ($status -ne 0) {
+            $errorLines = Select-String -Path $logPath -Pattern 'error(\[[A-Z0-9]+\])?:|could not compile|cannot find|mismatched types|no method named' -Context 3,12 |
+              Select-Object -Last 200 |
+              ForEach-Object { $_.ToString() }
+            if (-not $errorLines) {
+              $errorLines = Get-Content $logPath -Tail 160
+            }
+            $message = ($errorLines -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows cargo build failed::$message"
+          }
           exit $status
+      - name: Upload Windows build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-build-log
+          path: cargo-build-windows.log
+          if-no-files-found: warn
       - name: Install Windows packaging tools
         shell: pwsh
         run: choco install innosetup --no-progress -y
