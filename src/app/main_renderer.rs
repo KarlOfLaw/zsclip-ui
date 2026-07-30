@@ -387,7 +387,7 @@ pub(super) unsafe fn paint_main_window(hwnd: HWND) {
                                 size: (badge_h - 4).clamp(9, 13),
                                 bold: true,
                                 horizontal_align: HorizontalAlign::Center,
-                                vertical_align: VerticalAlign::Center,
+                                vertical_align: crate::app_core::VerticalAlign::Center,
                                 wrap: TextWrap::NoWrap,
                                 font: MainFontRole::UiText,
                             },
