@@ -462,9 +462,12 @@ pub(super) unsafe fn handle_main_async_event(hwnd: HWND, event: MainAsyncEvent) 
                 let state = &mut *ptr;
                 state.image_thumb_loading.remove(&payload.item_id);
                 if let Some(image) = payload.image {
+                    state.image_thumb_failed.remove(&payload.item_id);
                     state.image_thumb_cache.put(payload.item_id, image);
-                    repaint_main_window(hwnd, false);
+                } else {
+                    state.image_thumb_failed.insert(payload.item_id);
                 }
+                repaint_main_window(hwnd, false);
             }
         }
     }

@@ -175,7 +175,11 @@ fn apply_min_track_size(info: &mut MINMAXINFO, min_size: UiSize) {
 
 pub(super) unsafe fn on_create(hwnd: HWND, create_params: WindowCreateParams) -> AppResult<()> {
     let role = create_params.role;
-    let layout = main_layout_for_window(hwnd);
+    let layout = if role == WindowRole::Quick {
+        main_layout_for_window(hwnd).for_quick_window()
+    } else {
+        main_layout_for_window(hwnd)
+    };
     let mut search_host = WindowsMainSearchControlHost::new();
     let search_request = WindowsMainSearchControlHost::search_control_request_from_native_spec(
         hwnd,

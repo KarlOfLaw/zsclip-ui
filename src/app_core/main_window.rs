@@ -2601,7 +2601,6 @@ pub(crate) enum MainPaintCommand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MainTextRole {
     WindowTitleMain,
-    WindowTitleQuick,
     SegmentRecords,
     SegmentPhrases,
     EmptyLoading,
@@ -2885,6 +2884,11 @@ impl MainUiLayout {
         }
     }
 
+    pub(crate) fn for_quick_window(mut self) -> Self {
+        self.btn_w = ((self.btn_w * 13 + 8) / 16).max(20);
+        self
+    }
+
     pub(crate) fn fit_to_client(mut self, client_w: i32, client_h: i32) -> Self {
         let side_margin = self.list_x.max(1);
         let bottom_margin = side_margin.saturating_sub(1).max(1);
@@ -3116,8 +3120,9 @@ impl MainUiLayout {
 
     fn title_button_icon_rect(self, rect: UiRect) -> UiRect {
         let slot = rect.width();
-        let min_size = (self.title_h * 18 / 35).max(18);
-        let iw = ((slot * 18 / 36).max(min_size)).min((slot - 4).max(min_size));
+        let iw = ((slot * 19 + 16) / 32)
+            .max(12)
+            .min((slot - 8).max(12));
         let ix = rect.left + (rect.width() - iw) / 2;
         let iy = rect.top + (rect.height() - iw) / 2;
         UiRect::new(ix, iy, ix + iw, iy + iw)
@@ -3345,7 +3350,7 @@ impl MainUiLayout {
             },
         ];
         let title_text_rect = self.title_text_rect();
-        let chrome_text_commands = if input.search_on {
+        let chrome_text_commands = if input.search_on || input.quick_window {
             Vec::new()
         } else {
             chrome_commands.push(MainPaintCommand::RoundFill {
@@ -3359,11 +3364,7 @@ impl MainUiLayout {
                 radius: 2,
             });
             vec![MainTextCommand {
-                role: if input.quick_window {
-                    MainTextRole::WindowTitleQuick
-                } else {
-                    MainTextRole::WindowTitleMain
-                },
+                role: MainTextRole::WindowTitleMain,
                 layer: MainTextLayer::Content,
                 rect: title_text_rect,
                 color: MainThemeRole::Text,
@@ -6053,6 +6054,15 @@ mod tests {
         assert_eq!(fitted.title_h, base.title_h);
         assert!(fitted.search_w > base.search_w);
 
+        let quick = base.for_quick_window();
+        let base_close = base.title_button_rect("close");
+        let quick_close = quick.title_button_rect("close");
+        assert!(quick_close.width() < base_close.width());
+        assert!(
+            quick.title_button_icon_rect(quick_close).width()
+                < base.title_button_icon_rect(base_close).width()
+        );
+
         let compact = base.fit_to_client(300, 360);
         assert_eq!(compact.list_rect().bottom, 353);
         assert!(compact.list_h >= compact.row_h + compact.list_pad * 2);
@@ -6084,10 +6094,7 @@ mod tests {
         let mut quick_input = MainRenderInput::empty_records(client_rect);
         quick_input.quick_window = true;
         let quick_plan = layout.render_plan(quick_input);
-        assert_eq!(
-            quick_plan.chrome_text_commands[0].role,
-            MainTextRole::WindowTitleQuick
-        );
+        assert!(quick_plan.chrome_text_commands.is_empty());
     }
 
     #[test]

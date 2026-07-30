@@ -1,5 +1,12 @@
 use super::prelude::*;
 use crate::platform::gdi as platform_gdi;
+use crate::platform::gdiplus as platform_gdiplus;
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const MAX_CONCURRENT_IMAGE_THUMBNAIL_LOADS: usize = 2;
+const MAX_IMAGE_THUMBNAIL_FILE_BYTES: u64 = 128 * 1024 * 1024;
+static IMAGE_THUMBNAIL_LOADS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 struct DbItem {
     id: i64,
@@ -24,6 +31,45 @@ pub(super) struct LanOriginMetadata {
     pub(super) origin_device_id: String,
     pub(super) origin_seq: u64,
     pub(super) hash: String,
+}
+
+fn path_has_thumbnail_image_extension(path: &str) -> bool {
+    let Some(extension) = Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.trim().to_ascii_lowercase())
+    else {
+        return false;
+    };
+    matches!(
+        extension.as_str(),
+        "png" | "jpg" | "jpeg" | "jpe" | "jfif" | "bmp" | "gif" | "tif" | "tiff" | "ico"
+    )
+}
+
+pub(super) fn image_file_preview_path(item: &ClipItem) -> Option<&str> {
+    if item.kind != ClipKind::Files {
+        return None;
+    }
+    let paths = item.file_paths.as_deref()?;
+    if paths.is_empty()
+        || !paths
+            .iter()
+            .all(|path| path_has_thumbnail_image_extension(path))
+    {
+        return None;
+    }
+    paths.first().map(String::as_str)
+}
+
+pub(super) fn image_file_preview_extra_count(item: &ClipItem) -> usize {
+    if image_file_preview_path(item).is_none() {
+        return 0;
+    }
+    item.file_paths
+        .as_ref()
+        .map(|paths| paths.len().saturating_sub(1))
+        .unwrap_or(0)
 }
 
 fn split_paths_blob(value: Option<String>) -> Option<Vec<String>> {
@@ -658,17 +704,82 @@ fn build_image_thumbnail_rgba(
     })
 }
 
-fn spawn_image_thumbnail_load(hwnd: HWND, item_id: i64, path: String, max_side: usize) {
-    let hwnd_raw = hwnd as isize;
-    std::thread::spawn(move || {
-        let image = load_image_bytes_from_path(&path).and_then(|(bytes, width, height)| {
-            build_image_thumbnail_rgba(&bytes, width, height, max_side)
-        });
-        let payload = Box::new(ImageThumbReadyResult { item_id, image });
-        unsafe {
-            let _ = post_boxed_message(hwnd_raw, WM_IMAGE_THUMB_READY, 0, payload);
+struct ImageThumbnailLoadSlot;
+
+impl Drop for ImageThumbnailLoadSlot {
+    fn drop(&mut self) {
+        IMAGE_THUMBNAIL_LOADS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+    }
+}
+
+fn try_acquire_image_thumbnail_load_slot() -> bool {
+    let mut active = IMAGE_THUMBNAIL_LOADS_IN_FLIGHT.load(Ordering::Acquire);
+    loop {
+        if active >= MAX_CONCURRENT_IMAGE_THUMBNAIL_LOADS {
+            return false;
         }
-    });
+        match IMAGE_THUMBNAIL_LOADS_IN_FLIGHT.compare_exchange_weak(
+            active,
+            active + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(next) => active = next,
+        }
+    }
+}
+
+fn thumbnail_file_is_eligible(path: &str) -> bool {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed.starts_with("\\\\") || trimmed.starts_with("//") {
+        return false;
+    }
+    fs::metadata(trimmed)
+        .map(|metadata| metadata.is_file() && metadata.len() <= MAX_IMAGE_THUMBNAIL_FILE_BYTES)
+        .unwrap_or(false)
+}
+
+fn thumbnail_source_path(item: &ClipItem) -> Option<&str> {
+    match item.kind {
+        ClipKind::Image => item.image_path.as_deref(),
+        ClipKind::Files => image_file_preview_path(item),
+        ClipKind::Text | ClipKind::Phrase => None,
+    }
+}
+
+fn spawn_image_thumbnail_load(
+    hwnd: HWND,
+    item_id: i64,
+    path: String,
+    max_side: usize,
+) -> bool {
+    if !try_acquire_image_thumbnail_load_slot() {
+        return false;
+    }
+    let hwnd_raw = hwnd as isize;
+    let spawned = std::thread::Builder::new()
+        .name("zsclip-image-thumbnail".to_string())
+        .spawn(move || {
+            let _slot = ImageThumbnailLoadSlot;
+            let image = thumbnail_file_is_eligible(&path)
+                .then(|| platform_gdiplus::load_image_thumbnail_rgba(&path, max_side))
+                .flatten()
+                .map(|(bytes, width, height)| ImageThumbnail {
+                    bytes,
+                    width,
+                    height,
+                });
+            let payload = Box::new(ImageThumbReadyResult { item_id, image });
+            unsafe {
+                let _ = post_boxed_message(hwnd_raw, WM_IMAGE_THUMB_READY, 0, payload);
+            }
+        });
+    if spawned.is_err() {
+        IMAGE_THUMBNAIL_LOADS_IN_FLIGHT.fetch_sub(1, Ordering::Release);
+        return false;
+    }
+    true
 }
 
 pub(super) fn ensure_item_thumbnail_bytes(
@@ -680,12 +791,17 @@ pub(super) fn ensure_item_thumbnail_bytes(
         if let Some(image) = state.image_thumb_cache.get(item.id) {
             return Some((image.bytes, image.width, image.height));
         }
+        if state.image_thumb_failed.contains(&item.id) {
+            return None;
+        }
     }
     let (bytes, width, height) = if let Some(bytes) = &item.image_bytes {
         (bytes.clone(), item.image_width, item.image_height)
-    } else if let Some(path) = item.image_path.as_ref() {
+    } else if let Some(path) = thumbnail_source_path(item) {
         if item.id > 0 && state.image_thumb_loading.insert(item.id) {
-            spawn_image_thumbnail_load(state.hwnd, item.id, path.clone(), max_side);
+            if !spawn_image_thumbnail_load(state.hwnd, item.id, path.to_string(), max_side) {
+                state.image_thumb_loading.remove(&item.id);
+            }
         }
         return None;
     } else {
@@ -693,10 +809,12 @@ pub(super) fn ensure_item_thumbnail_bytes(
     };
     let thumb = build_image_thumbnail_rgba(&bytes, width, height, max_side)?;
     if item.id > 0 {
+        state.image_thumb_failed.remove(&item.id);
         state.image_thumb_cache.put(item.id, thumb.clone());
     }
     Some((thumb.bytes, thumb.width, thumb.height))
 }
+
 
 fn current_search_date_context() -> SearchDateContext {
     let now_secs = SystemTime::now()
@@ -1584,6 +1702,44 @@ pub(super) fn reload_state_from_db(state: &mut AppState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn file_item(paths: &[&str]) -> ClipItem {
+        ClipItem {
+            id: 42,
+            kind: ClipKind::Files,
+            preview: String::new(),
+            text: None,
+            rich_text_html: None,
+            source_app: String::new(),
+            file_paths: Some(paths.iter().map(|path| (*path).to_string()).collect()),
+            image_bytes: None,
+            image_path: None,
+            image_width: 0,
+            image_height: 0,
+            pinned: false,
+            group_id: 0,
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn image_file_preview_uses_first_image_and_counts_the_rest() {
+        let item = file_item(&[r"C:\Pictures\first.PNG", r"C:\Pictures\second.jpg"]);
+
+        assert_eq!(
+            image_file_preview_path(&item),
+            Some(r"C:\Pictures\first.PNG")
+        );
+        assert_eq!(image_file_preview_extra_count(&item), 1);
+    }
+
+    #[test]
+    fn image_file_preview_rejects_mixed_file_selections() {
+        let item = file_item(&[r"C:\Pictures\first.png", r"C:\Notes\readme.txt"]);
+
+        assert_eq!(image_file_preview_path(&item), None);
+        assert_eq!(image_file_preview_extra_count(&item), 0);
+    }
 
     fn insert_item(
         category: i64,

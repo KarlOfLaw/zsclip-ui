@@ -32,7 +32,8 @@ pub(super) fn pt_in_rect(x: i32, y: i32, rc: &RECT) -> bool {
 }
 
 pub(super) fn row_supports_image_preview(item: &ClipItem, settings: &AppSettings) -> bool {
-    settings.image_preview_enabled && item.kind == ClipKind::Image
+    settings.image_preview_enabled
+        && (item.kind == ClipKind::Image || image_file_preview_path(item).is_some())
 }
 
 pub(super) fn scroll_to_top_visible(state: &AppState) -> bool {

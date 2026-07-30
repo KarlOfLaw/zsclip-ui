@@ -46,7 +46,6 @@ pub(super) unsafe fn draw_main_paint_command(hdc: HDC, command: MainPaintCommand
 fn main_text_command_text(role: MainTextRole) -> &'static str {
     match role {
         MainTextRole::WindowTitleMain => tr("剪贴板", "Clipboard"),
-        MainTextRole::WindowTitleQuick => tr("快速剪贴板", "Quick Clipboard"),
         MainTextRole::SegmentRecords => "复制记录",
         MainTextRole::SegmentPhrases => "常用短语",
         MainTextRole::EmptyLoading => tr("正在加载...", "Loading..."),
@@ -325,7 +324,8 @@ pub(super) unsafe fn paint_main_window(hwnd: HWND) {
                 MainRowContentInput {
                     pinned: row_presentation.pin_badge.is_some(),
                     show_delete: row_shows_delete_button(state, i),
-                    show_preview: row_supports_image_preview(&item, &state.settings),
+                    show_preview: row_supports_image_preview(&item, &state.settings)
+                        && !state.image_thumb_failed.contains(&item.id),
                 },
             );
 
@@ -353,6 +353,48 @@ pub(super) unsafe fn paint_main_window(hwnd: HWND) {
                         &preview_rc,
                         th.surface2,
                     );
+                    let extra_images = image_file_preview_extra_count(&item);
+                    if extra_images > 0 {
+                        let label = if extra_images > 99 {
+                            "+99+".to_string()
+                        } else {
+                            format!("+{extra_images}")
+                        };
+                        let preview_height = preview_rc.bottom - preview_rc.top;
+                        let badge_h = (preview_height * 5 / 12).clamp(12, 20);
+                        let badge_w = badge_h + if extra_images > 9 { 8 } else { 4 };
+                        let badge_rect = UiRect::new(
+                            preview_rc.right - badge_w + 2,
+                            preview_rc.bottom - badge_h + 2,
+                            preview_rc.right + 2,
+                            preview_rc.bottom + 2,
+                        );
+                        draw_main_paint_command(
+                            memdc,
+                            MainPaintCommand::RoundRect {
+                                rect: badge_rect,
+                                fill: MainPaintFill::Theme(MainThemeRole::Surface),
+                                stroke: Some(MainThemeRole::Accent),
+                                radius: badge_h / 2,
+                            },
+                            th,
+                        );
+                        draw_main_row_text_command(
+                            memdc,
+                            MainRowTextCommand {
+                                rect: badge_rect,
+                                color: MainThemeRole::Accent,
+                                size: (badge_h - 4).clamp(9, 13),
+                                bold: true,
+                                horizontal_align: HorizontalAlign::Center,
+                                vertical_align: VerticalAlign::Center,
+                                wrap: TextWrap::NoWrap,
+                                font: MainFontRole::UiText,
+                            },
+                            &label,
+                            th,
+                        );
+                    }
                 }
             }
             let display_preview: String;

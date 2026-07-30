@@ -144,6 +144,7 @@ impl AppState {
         self.payload_cache.clear();
         self.image_thumb_cache.clear();
         self.image_thumb_loading.clear();
+        self.image_thumb_failed.clear();
     }
 
     pub(super) fn cache_full_item(&mut self, item: ClipItem) {
@@ -154,6 +155,7 @@ impl AppState {
         self.payload_cache.remove(id);
         self.image_thumb_cache.remove(id);
         self.image_thumb_loading.remove(&id);
+        self.image_thumb_failed.remove(&id);
     }
 
     pub(super) fn current_scroll_anchor(&self) -> Option<(i64, i32)> {
@@ -405,8 +407,13 @@ impl AppState {
     }
 
     pub(super) fn layout(&self) -> MainUiLayout {
-        main_layout_for_dpi(self.ui_dpi)
-            .fit_to_client(self.client_size.width, self.client_size.height)
+        let layout = main_layout_for_dpi(self.ui_dpi);
+        let layout = if self.role == WindowRole::Quick {
+            layout.for_quick_window()
+        } else {
+            layout
+        };
+        layout.fit_to_client(self.client_size.width, self.client_size.height)
     }
 
     pub(super) fn quick_action_rect_slot(&self, visible_idx: i32, slot: i32) -> Option<RECT> {
