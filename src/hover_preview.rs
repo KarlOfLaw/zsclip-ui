@@ -234,10 +234,13 @@ unsafe fn preview_hwnd() -> HWND {
 }
 
 fn image_zoom_window_size(image_width: usize, image_height: usize, work_area: &RECT) -> (i32, i32) {
-    let max_w = ((work_area.right - work_area.left) * 8 / 10).max(PREVIEW_W_IMAGE);
-    let max_h = ((work_area.bottom - work_area.top) * 8 / 10).max(PREVIEW_H_IMAGE);
-    let w = (image_width as i32 + 24).max(PREVIEW_W_IMAGE).min(max_w);
-    let h = (image_height as i32 + 52).max(PREVIEW_H_IMAGE).min(max_h);
+    // 放大预览的目标尺寸贴近图片原尺寸（绘制时以 1.0 为上限、不放大），
+    // 仅在大到超出工作区 80% 时才按比例收缩，从而「接近原尺寸查看」。
+    // 不再以 PREVIEW_W_IMAGE / PREVIEW_H_IMAGE 为下限，否则小图与通用预览无异。
+    let max_w = ((work_area.right - work_area.left) * 8 / 10).max(320);
+    let max_h = ((work_area.bottom - work_area.top) * 8 / 10).max(320);
+    let w = (image_width as i32 + 24).max(200).min(max_w);
+    let h = (image_height as i32 + 52).max(160).min(max_h);
     (w, h)
 }
 

@@ -20,7 +20,7 @@ pub(super) unsafe fn hover_preview_blocked_at_point(state: &AppState, x: i32, y:
 }
 
 unsafe fn refresh_hover_preview(hwnd: HWND, state: &mut AppState, x: i32, y: i32) {
-    if !state.settings.hover_preview || state.edge_hidden {
+    if state.edge_hidden {
         hide_hover_preview();
         return;
     }
@@ -35,6 +35,38 @@ unsafe fn refresh_hover_preview(hwnd: HWND, state: &mut AppState, x: i32, y: i32
         hide_hover_preview();
         return;
     };
+
+    let is_image = matches!(item_summary.kind, ClipKind::Image);
+
+    // 图片缩略图放大预览：独立于通用 hover_preview 开关，
+    // 仅由 image_zoom_preview_enabled 控制。当鼠标悬停在行内图片缩略图上时，
+    // 显示接近原尺寸的图片预览，移开后即消失。
+    let zoom = state.settings.image_zoom_preview_enabled
+        && is_image
+        && compute_row_preview_rect(state, state.hover_idx)
+            .map(|rc| {
+                let rc: RECT = rc.into();
+                pt_in_rect(x, y, &rc)
+            })
+            .unwrap_or(false);
+
+    if zoom {
+        show_hover_preview(&item_summary, win_rc.left + x, win_rc.top + y, true);
+        return;
+    }
+
+    // 通用 hover 预览（文本/文件/图片），仍受 hover_preview 开关控制。
+    // 当图片放大预览开启时，图片行仅在缩略图上才放大显示，
+    // 其余区域不再显示通用小预览，以保证「移开缩略图即消失」的预期行为。
+    if !state.settings.hover_preview {
+        hide_hover_preview();
+        return;
+    }
+    if is_image && state.settings.image_zoom_preview_enabled {
+        hide_hover_preview();
+        return;
+    }
+
     let item = if matches!(item_summary.kind, ClipKind::Text | ClipKind::Phrase) {
         state
             .load_item_full_cached(item_summary.id)
@@ -42,16 +74,7 @@ unsafe fn refresh_hover_preview(hwnd: HWND, state: &mut AppState, x: i32, y: i32
     } else {
         item_summary
     };
-    // 当鼠标悬停在图片缩略图上时，使用放大预览模式
-    let zoom = state.settings.image_zoom_preview_enabled
-        && item.kind == ClipKind::Image
-        && compute_row_preview_rect(state, state.hover_idx)
-            .map(|rc| {
-                let rc: RECT = rc.into();
-                pt_in_rect(x, y, &rc)
-            })
-            .unwrap_or(false);
-    show_hover_preview(&item, win_rc.left + x, win_rc.top + y, zoom);
+    show_hover_preview(&item, win_rc.left + x, win_rc.top + y, false);
 }
 
 pub(super) unsafe fn handle_mouse_hover_main(hwnd: HWND, position: UiPoint) {
