@@ -28,6 +28,7 @@ fn is_general_surface_control(id: isize) -> bool {
             | IDC_SET_HOVERPREVIEW
             | IDC_SET_VV_MODE
             | IDC_SET_IMAGE_PREVIEW
+            | IDC_SET_IMAGE_ZOOM_PREVIEW
             | IDC_SET_QUICK_DELETE
             | IDC_SET_MAX
             | IDC_SET_POSMODE

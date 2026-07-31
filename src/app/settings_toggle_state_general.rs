@@ -18,6 +18,7 @@ pub(super) fn settings_toggle_general_get(st: &SettingsWndState, cid: isize) -> 
         IDC_SET_HOVERPREVIEW => Some(st.draft.hover_preview),
         IDC_SET_VV_MODE => Some(st.draft.vv_mode_enabled),
         IDC_SET_IMAGE_PREVIEW => Some(st.draft.image_preview_enabled),
+        IDC_SET_IMAGE_ZOOM_PREVIEW => Some(st.draft.image_zoom_preview_enabled),
         IDC_SET_QUICK_DELETE => Some(st.draft.quick_delete_button),
         _ => None,
     }
@@ -49,6 +50,9 @@ pub(super) fn settings_toggle_general_flip(st: &mut SettingsWndState, cid: isize
         IDC_SET_HOVERPREVIEW => st.draft.hover_preview = !st.draft.hover_preview,
         IDC_SET_VV_MODE => st.draft.vv_mode_enabled = !st.draft.vv_mode_enabled,
         IDC_SET_IMAGE_PREVIEW => st.draft.image_preview_enabled = !st.draft.image_preview_enabled,
+        IDC_SET_IMAGE_ZOOM_PREVIEW => {
+            st.draft.image_zoom_preview_enabled = !st.draft.image_zoom_preview_enabled
+        }
         IDC_SET_QUICK_DELETE => st.draft.quick_delete_button = !st.draft.quick_delete_button,
         _ => return false,
     }

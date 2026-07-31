@@ -88,10 +88,18 @@ pub(super) unsafe fn settings_create_general_startup_behavior_page(
     );
     let _ = b.own_toggle_row(
         st,
+        tr("悬停缩略图放大预览", "Hover thumbnail to zoom"),
+        IDC_SET_IMAGE_ZOOM_PREVIEW,
+        sec0.left(),
+        sec0.row_y(9),
+        sec0.full_w(),
+    );
+    let _ = b.own_toggle_row(
+        st,
         tr("快速删除按钮", "Quick delete button"),
         IDC_SET_QUICK_DELETE,
         sec0.left(),
-        sec0.row_y(9),
+        sec0.row_y(10),
         sec0.full_w(),
     );
 

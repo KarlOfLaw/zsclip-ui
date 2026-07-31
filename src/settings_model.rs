@@ -2868,6 +2868,7 @@ fn native_control_binding_for_key(key: &str) -> Option<SettingsNativeControlBind
         "hover_preview" => native_setting_binding("hover_preview"),
         "vv_mode" => native_setting_binding("vv_mode_enabled"),
         "image_preview" => native_setting_binding("image_preview_enabled"),
+        "image_zoom_preview" => native_setting_binding("image_zoom_preview_enabled"),
         "rich_text" => native_setting_binding("rich_text_clipboard_enabled"),
         "quick_delete" => native_setting_binding("quick_delete_button"),
         "max_items" => native_setting_binding("max_items"),
@@ -2984,6 +2985,7 @@ fn native_control_route_for_key(key: &str) -> Option<SettingsNativeControlRoute>
         "hover_preview" => native_toggle_route(5014),
         "vv_mode" => native_toggle_route(5054),
         "image_preview" => native_toggle_route(5051),
+        "image_zoom_preview" => native_toggle_route(5097),
         "quick_delete" => native_toggle_route(5052),
         "rich_text" => native_toggle_route(5096),
         "max_items" => native_dropdown_route(5015),
@@ -3107,6 +3109,7 @@ pub fn settings_native_control_summaries() -> Vec<SettingsNativeControlSummary> 
             ("hover_preview", "悬停预览", Toggle),
             ("vv_mode", "VV 模式", Toggle),
             ("image_preview", "图片缩略图", Toggle),
+            ("image_zoom_preview", "悬停缩略图放大预览", Toggle),
             ("quick_delete", "快速删除按钮", Toggle),
         ],
     );
@@ -3585,6 +3588,7 @@ fn settings_native_json_updates_for_applied_field(
         | "hover_preview"
         | "vv_mode_enabled"
         | "image_preview_enabled"
+        | "image_zoom_preview_enabled"
         | "quick_delete_button"
         | "click_hide"
         | "move_pasted_item_to_top"

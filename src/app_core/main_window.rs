@@ -2002,9 +2002,9 @@ pub(crate) struct MainVvPopupLayout {
 impl Default for MainVvPopupLayout {
     fn default() -> Self {
         Self {
-            width: 360,
+            width: 384,
             header_h: 58,
-            row_h: 30,
+            row_h: 36,
         }
     }
 }
@@ -2168,23 +2168,19 @@ impl MainVvPopupLayout {
         } else {
             for (row, item) in items.iter().enumerate() {
                 let row_rect = self.row_rect(row);
-                let bubble = UiRect::new(
+                // 简约序号：去掉气泡背景，纯文本数字右对齐在固定宽度序号区内
+                let index_rect = UiRect::new(
                     row_rect.left,
-                    row_rect.top + s(4),
+                    row_rect.top,
                     row_rect.left + s(24),
-                    row_rect.top + s(24),
+                    row_rect.bottom,
                 );
-                paint_commands.push(MainPaintCommand::RoundFill {
-                    rect: bubble,
-                    fill: MainPaintFill::Theme(MainThemeRole::Accent),
-                    radius: s(8),
-                });
                 text_commands.push(MainVvPopupTextCommand {
                     role: MainVvPopupTextRole::RowIndex,
                     text: item.index.to_string(),
-                    rect: bubble,
-                    color: MainThemeRole::OnAccent,
-                    size: s(11),
+                    rect: index_rect,
+                    color: MainThemeRole::TextMuted,
+                    size: s(13),
                     bold: true,
                     horizontal_align: HorizontalAlign::Center,
                     font: MainFontRole::UiText,
@@ -2193,7 +2189,7 @@ impl MainVvPopupLayout {
                     role: MainVvPopupTextRole::RowPreview,
                     text: item.label.clone(),
                     rect: UiRect::new(
-                        row_rect.left + s(34),
+                        row_rect.left + s(32),
                         row_rect.top,
                         row_rect.right,
                         row_rect.bottom,
@@ -5372,31 +5368,31 @@ mod tests {
     fn main_vv_popup_layout_describes_size_rects_and_hits() {
         let layout = MainVvPopupLayout::default();
         assert_eq!(MAIN_VV_POPUP_MAX_ITEMS, 9);
-        assert_eq!(layout.height(0), 108);
-        assert_eq!(layout.height(3), 168);
-        assert_eq!(layout.group_rect(), UiRect::new(210, 10, 346, 34));
-        assert_eq!(layout.row_rect(0), UiRect::new(12, 68, 348, 96));
-        assert_eq!(layout.row_rect(2), UiRect::new(12, 128, 348, 156));
+        assert_eq!(layout.height(0), 118);
+        assert_eq!(layout.height(3), 190);
+        assert_eq!(layout.group_rect(), UiRect::new(204, 12, 367, 41));
+        assert_eq!(layout.row_rect(0), UiRect::new(14, 70, 370, 104));
+        assert_eq!(layout.row_rect(2), UiRect::new(14, 142, 370, 176));
 
         assert_eq!(layout.hit_test(220, 18, 3), MainVvPopupHit::Group);
         assert_eq!(layout.hit_test(1, 70, 3), MainVvPopupHit::Row(0));
-        assert_eq!(layout.hit_test(50, 129, 3), MainVvPopupHit::Row(2));
+        assert_eq!(layout.hit_test(50, 150, 3), MainVvPopupHit::Row(2));
         assert_eq!(layout.hit_test(50, 200, 3), MainVvPopupHit::None);
     }
 
     #[test]
     fn main_vv_popup_layout_scales_for_high_dpi_and_resized_width() {
         let layout = MainVvPopupLayout::default().scaled(192);
-        assert_eq!(layout.width, 720);
+        assert_eq!(layout.width, 769);
         assert_eq!(layout.header_h, 116);
-        assert_eq!(layout.row_h, 60);
-        assert_eq!(layout.height(3), 336);
-        assert_eq!(layout.group_rect(), UiRect::new(420, 20, 692, 68));
-        assert_eq!(layout.row_rect(0), UiRect::new(24, 136, 696, 192));
+        assert_eq!(layout.row_h, 72);
+        assert_eq!(layout.height(3), 380);
+        assert_eq!(layout.group_rect(), UiRect::new(409, 24, 735, 82));
+        assert_eq!(layout.row_rect(0), UiRect::new(29, 140, 740, 207));
 
         let widened = layout.with_width(900);
-        assert_eq!(widened.group_rect(), UiRect::new(600, 20, 872, 68));
-        assert_eq!(widened.row_rect(0), UiRect::new(24, 136, 876, 192));
+        assert_eq!(widened.group_rect(), UiRect::new(540, 24, 866, 82));
+        assert_eq!(widened.row_rect(0), UiRect::new(29, 140, 871, 207));
     }
 
     #[test]
@@ -5407,7 +5403,7 @@ mod tests {
             hint: "Press 1-9".to_string(),
             empty: "No records".to_string(),
         };
-        let empty = layout.render_plan(UiRect::new(0, 0, 360, 108), &strings, "All", &[]);
+        let empty = layout.render_plan(UiRect::new(0, 0, 384, 118), &strings, "All", &[]);
         assert_eq!(empty.paint_commands.len(), 3);
         assert_eq!(
             empty
@@ -5436,21 +5432,22 @@ mod tests {
             index: 3,
             label: "row label".to_string(),
         }];
-        let rows = layout.render_plan(UiRect::new(0, 0, 360, 108), &strings, "All", &items);
-        assert_eq!(rows.paint_commands.len(), 4);
+        let rows = layout.render_plan(UiRect::new(0, 0, 384, 118), &strings, "All", &items);
+        // 去掉序号气泡后，paint_commands = 外框 + group fill + group rect = 3
+        assert_eq!(rows.paint_commands.len(), 3);
         assert_eq!(
             rows.text_commands
                 .iter()
                 .find(|command| command.role == MainVvPopupTextRole::RowIndex)
                 .map(|command| (command.text.as_str(), command.rect, command.color)),
-            Some(("3", UiRect::new(12, 72, 36, 92), MainThemeRole::OnAccent))
+            Some(("3", UiRect::new(14, 70, 43, 104), MainThemeRole::TextMuted))
         );
         assert_eq!(
             rows.text_commands
                 .iter()
                 .find(|command| command.role == MainVvPopupTextRole::RowPreview)
                 .map(|command| (command.text.as_str(), command.rect)),
-            Some(("row label", UiRect::new(46, 68, 348, 96)))
+            Some(("row label", UiRect::new(52, 70, 370, 104)))
         );
     }
 

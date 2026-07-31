@@ -50,6 +50,7 @@ struct HoverPreviewData {
     last_y: i32,
     last_w: i32,
     last_h: i32,
+    zoom_mode: bool,
 }
 
 static HOVER_HWND: OnceLock<isize> = OnceLock::new();
@@ -222,6 +223,7 @@ unsafe fn create_preview_window() -> HWND {
             last_y: i32::MIN,
             last_w: 0,
             last_h: 0,
+            zoom_mode: false,
         })) as _,
     )
 }
@@ -229,6 +231,14 @@ unsafe fn create_preview_window() -> HWND {
 unsafe fn preview_hwnd() -> HWND {
     let raw = *HOVER_HWND.get_or_init(|| create_preview_window() as isize);
     raw as HWND
+}
+
+fn image_zoom_window_size(image_width: usize, image_height: usize, work_area: &RECT) -> (i32, i32) {
+    let max_w = ((work_area.right - work_area.left) * 8 / 10).max(PREVIEW_W_IMAGE);
+    let max_h = ((work_area.bottom - work_area.top) * 8 / 10).max(PREVIEW_H_IMAGE);
+    let w = (image_width as i32 + 24).max(PREVIEW_W_IMAGE).min(max_w);
+    let h = (image_height as i32 + 52).max(PREVIEW_H_IMAGE).min(max_h);
+    (w, h)
 }
 
 fn limit_preview_text(text: &str, max_lines: usize, max_chars: usize) -> String {
@@ -320,6 +330,7 @@ pub(crate) unsafe fn hide_hover_preview() {
             (*ptr).image_width = 0;
             (*ptr).image_height = 0;
             (*ptr).loading_item_id = 0;
+            (*ptr).zoom_mode = false;
         }
         platform_window::hide(hwnd);
     }
@@ -338,7 +349,12 @@ fn spawn_hover_image_load(hwnd: HWND, item: ClipItem) {
     });
 }
 
-pub(crate) unsafe fn show_hover_preview(item: &ClipItem, cursor_x: i32, cursor_y: i32) {
+pub(crate) unsafe fn show_hover_preview(
+    item: &ClipItem,
+    cursor_x: i32,
+    cursor_y: i32,
+    zoom: bool,
+) {
     let hwnd = preview_hwnd();
     if !platform_window::exists(hwnd) {
         return;
@@ -399,15 +415,17 @@ pub(crate) unsafe fn show_hover_preview(item: &ClipItem, cursor_x: i32, cursor_y
         None
     };
 
-    let (w, h) = if image_shape.is_some() {
-        (PREVIEW_W_IMAGE, PREVIEW_H_IMAGE)
-    } else {
-        (PREVIEW_W_TEXT, PREVIEW_H_TEXT)
-    };
     let wa = platform_monitor::nearest_work_rect_for_point(POINT {
         x: cursor_x,
         y: cursor_y,
     });
+    let (w, h) = if zoom && image_shape.is_some() {
+        image_zoom_window_size(item.image_width, item.image_height, &wa)
+    } else if image_shape.is_some() {
+        (PREVIEW_W_IMAGE, PREVIEW_H_IMAGE)
+    } else {
+        (PREVIEW_W_TEXT, PREVIEW_H_TEXT)
+    };
     let mut x = cursor_x + 16;
     let mut y = cursor_y + 22;
     if x + w > wa.right {
@@ -421,8 +439,11 @@ pub(crate) unsafe fn show_hover_preview(item: &ClipItem, cursor_x: i32, cursor_y
 
     let data = &mut *ptr;
     let same_image_shape = image_shape == Some((data.image_width, data.image_height));
-    let same_content =
-        data.item_id == item.id && data.header == header && data.body == body && same_image_shape;
+    let same_content = data.item_id == item.id
+        && data.header == header
+        && data.body == body
+        && same_image_shape
+        && data.zoom_mode == zoom;
     let same_geometry =
         data.last_x == x && data.last_y == y && data.last_w == w && data.last_h == h;
     let visible = platform_window::is_visible(hwnd);
@@ -473,6 +494,7 @@ pub(crate) unsafe fn show_hover_preview(item: &ClipItem, cursor_x: i32, cursor_y
     data.last_y = y;
     data.last_w = w;
     data.last_h = h;
+    data.zoom_mode = zoom;
 
     platform_window::set_pos(
         hwnd,

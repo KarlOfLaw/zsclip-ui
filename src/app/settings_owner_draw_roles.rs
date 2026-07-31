@@ -24,6 +24,7 @@ pub(super) fn settings_owner_draw_is_toggle(cid: isize) -> bool {
             | IDC_SET_HOVERPREVIEW
             | IDC_SET_VV_MODE
             | IDC_SET_IMAGE_PREVIEW
+            | IDC_SET_IMAGE_ZOOM_PREVIEW
             | IDC_SET_QUICK_DELETE
             | IDC_SET_GROUP_ENABLE
             | IDC_SET_GROUP_TYPE_FILTER

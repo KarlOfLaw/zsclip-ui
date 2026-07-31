@@ -54,6 +54,7 @@ pub const IDC_SET_LAN_COPY_SETUP: isize = 5095;
 pub const IDC_SET_RICH_TEXT: isize = 5096;
 pub const IDC_SET_PLUGIN_MAILMERGE: isize = 5050;
 pub const IDC_SET_IMAGE_PREVIEW: isize = 5051;
+pub const IDC_SET_IMAGE_ZOOM_PREVIEW: isize = 5097;
 pub const IDC_SET_QUICK_DELETE: isize = 5052;
 pub const IDC_SET_OPEN_SOURCE: isize = 5053;
 pub const IDC_SET_VV_MODE: isize = 5054;

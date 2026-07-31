@@ -42,7 +42,13 @@ unsafe fn refresh_hover_preview(hwnd: HWND, state: &mut AppState, x: i32, y: i32
     } else {
         item_summary
     };
-    show_hover_preview(&item, win_rc.left + x, win_rc.top + y);
+    // 当鼠标悬停在图片缩略图上时，使用放大预览模式
+    let zoom = state.settings.image_zoom_preview_enabled
+        && item.kind == ClipKind::Image
+        && compute_row_preview_rect(state, state.hover_idx)
+            .map(|rc| pt_in_rect(x, y, &rc))
+            .unwrap_or(false);
+    show_hover_preview(&item, win_rc.left + x, win_rc.top + y, zoom);
 }
 
 pub(super) unsafe fn handle_mouse_hover_main(hwnd: HWND, position: UiPoint) {
