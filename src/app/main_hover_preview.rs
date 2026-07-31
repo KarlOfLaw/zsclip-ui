@@ -46,7 +46,10 @@ unsafe fn refresh_hover_preview(hwnd: HWND, state: &mut AppState, x: i32, y: i32
     let zoom = state.settings.image_zoom_preview_enabled
         && item.kind == ClipKind::Image
         && compute_row_preview_rect(state, state.hover_idx)
-            .map(|rc| pt_in_rect(x, y, &rc))
+            .map(|rc| {
+                let rc: RECT = rc.into();
+                pt_in_rect(x, y, &rc)
+            })
             .unwrap_or(false);
     show_hover_preview(&item, win_rc.left + x, win_rc.top + y, zoom);
 }
