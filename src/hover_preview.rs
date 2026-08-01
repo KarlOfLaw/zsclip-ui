@@ -10,7 +10,10 @@ use windows_sys::Win32::{
 };
 
 use crate::{
-    app::{ensure_item_image_bytes, rich_text_preview_text, ClipItem, ClipKind},
+    app::{
+        ensure_hover_preview_image_bytes, item_has_image_preview, rich_text_preview_text, ClipItem,
+        ClipKind,
+    },
     i18n::tr,
     platform::{
         appearance as platform_appearance, gdi as platform_gdi, monitor as platform_monitor,
@@ -50,7 +53,10 @@ struct HoverPreviewData {
     last_y: i32,
     last_w: i32,
     last_h: i32,
+    cursor_x: i32,
+    cursor_y: i32,
     zoom_mode: bool,
+    image_preview: bool,
 }
 
 static HOVER_HWND: OnceLock<isize> = OnceLock::new();
@@ -75,44 +81,53 @@ unsafe extern "system" fn preview_wnd_proc(
             if !hdc.is_null() && !ptr.is_null() {
                 let th = Theme::default();
                 let data = &*ptr;
+                let image_only = data.zoom_mode && data.image_preview;
                 let rc = platform_window::client_rect(hwnd).unwrap_or_else(|| zeroed());
                 let bg = platform_gdi::create_solid_brush(th.surface);
                 platform_gdi::fill_rect(hdc, &rc, bg);
                 platform_gdi::delete_object(bg as _);
-                draw_round_rect(hdc as _, &rc, th.surface, th.stroke, 10);
+                if !image_only {
+                    draw_round_rect(hdc as _, &rc, th.surface, th.stroke, 10);
 
-                let header_rc = RECT {
-                    left: 14,
-                    top: 10,
-                    right: rc.right - 14,
-                    bottom: 34,
-                };
-                draw_text_ex(
-                    hdc as _,
-                    &data.header,
-                    &header_rc,
-                    th.text_muted,
-                    12,
-                    true,
-                    false,
-                    "Segoe UI Variable Text",
-                );
+                    let header_rc = RECT {
+                        left: 14,
+                        top: 10,
+                        right: rc.right - 14,
+                        bottom: 34,
+                    };
+                    draw_text_ex(
+                        hdc as _,
+                        &data.header,
+                        &header_rc,
+                        th.text_muted,
+                        12,
+                        true,
+                        false,
+                        "Segoe UI Variable Text",
+                    );
+                }
 
                 if let Some((bytes, width, height)) = &data.image {
                     let bgra = rgba_to_opaque_bgra_on_bg(bytes, th.surface);
-                    let content = RECT {
-                        left: 12,
-                        top: 40,
-                        right: rc.right - 12,
-                        bottom: rc.bottom - 12,
+                    let content = if image_only {
+                        rc
+                    } else {
+                        RECT {
+                            left: 12,
+                            top: 40,
+                            right: rc.right - 12,
+                            bottom: rc.bottom - 12,
+                        }
                     };
                     let avail_w = (content.right - content.left).max(1);
                     let avail_h = (content.bottom - content.top).max(1);
-                    let scale = (avail_w as f32 / *width as f32)
-                        .min(avail_h as f32 / *height as f32)
+                    let src_width = (*width).max(1) as f32;
+                    let src_height = (*height).max(1) as f32;
+                    let scale = (avail_w as f32 / src_width)
+                        .min(avail_h as f32 / src_height)
                         .min(1.0);
-                    let dw = ((*width as f32) * scale).max(1.0) as i32;
-                    let dh = ((*height as f32) * scale).max(1.0) as i32;
+                    let dw = (src_width * scale).max(1.0) as i32;
+                    let dh = (src_height * scale).max(1.0) as i32;
                     let dx = content.left + (avail_w - dw) / 2;
                     let dy = content.top + (avail_h - dh) / 2;
 
@@ -122,11 +137,11 @@ unsafe extern "system" fn preview_wnd_proc(
                         dy,
                         dw,
                         dh,
-                        *width as i32,
-                        *height as i32,
+                        src_width as i32,
+                        src_height as i32,
                         &bgra,
                     );
-                } else if !data.body.is_empty() {
+                } else if !image_only && !data.body.is_empty() {
                     let body_rc = RECT {
                         left: 14,
                         top: 42,
@@ -135,11 +150,15 @@ unsafe extern "system" fn preview_wnd_proc(
                     };
                     draw_text_block(hdc as _, &data.body, &body_rc, th.text, 12, false);
                 } else {
-                    let body_rc = RECT {
-                        left: 14,
-                        top: 42,
-                        right: rc.right - 14,
-                        bottom: rc.bottom - 14,
+                    let body_rc = if image_only {
+                        rc
+                    } else {
+                        RECT {
+                            left: 14,
+                            top: 42,
+                            right: rc.right - 14,
+                            bottom: rc.bottom - 14,
+                        }
                     };
                     draw_text_block(
                         hdc as _,
@@ -165,8 +184,36 @@ unsafe extern "system" fn preview_wnd_proc(
             if !ptr.is_null() {
                 let data = &mut *ptr;
                 if data.item_id == payload.item_id {
+                    if let Some((_, width, height)) = payload.image.as_ref() {
+                        data.image_width = *width;
+                        data.image_height = *height;
+                    }
                     data.image = payload.image;
                     data.loading_item_id = 0;
+                    if data.zoom_mode && data.image_preview {
+                        if let Some((_, width, height)) = data.image.as_ref() {
+                            let wa = platform_monitor::nearest_work_rect_for_point(POINT {
+                                x: data.cursor_x,
+                                y: data.cursor_y,
+                            });
+                            let (w, h) = image_zoom_window_size(*width, *height, &wa);
+                            let (x, y) =
+                                preview_window_position(data.cursor_x, data.cursor_y, w, h, &wa);
+                            data.last_x = x;
+                            data.last_y = y;
+                            data.last_w = w;
+                            data.last_h = h;
+                            platform_window::set_pos(
+                                hwnd,
+                                HWND_TOPMOST,
+                                x,
+                                y,
+                                w,
+                                h,
+                                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                            );
+                        }
+                    }
                     platform_gdi::invalidate_rect(hwnd, null(), 0);
                 }
             }
@@ -223,7 +270,10 @@ unsafe fn create_preview_window() -> HWND {
             last_y: i32::MIN,
             last_w: 0,
             last_h: 0,
+            cursor_x: i32::MIN,
+            cursor_y: i32::MIN,
             zoom_mode: false,
+            image_preview: false,
         })) as _,
     )
 }
@@ -233,36 +283,42 @@ unsafe fn preview_hwnd() -> HWND {
     raw as HWND
 }
 
-// 放大预览窗的固定装饰尺寸（客户区外的边框/标题留白），与 WM_PAINT 内容矩形一致。
-const ZOOM_CHROME_W: i32 = 24; // 左右内边距
-const ZOOM_CHROME_H: i32 = 52; // 顶部 header 40 + 底部 12
-const ZOOM_MIN_W: i32 = 240;
-const ZOOM_MIN_H: i32 = 180;
-
 /// 计算图片放大预览窗尺寸（物理像素，PMv2 下 1:1，不做 DPI 换算）。
 ///
-/// 采用整数等比收缩「只缩不放」：窗口内容区宽高比严格等于图片宽高比，
-/// 消除旧算法固定加常量导致的左右空白死区（A-06）。
+/// 放大预览窗不添加卡片边框、标题和内边距，窗口客户区就是图片画布。
 fn image_zoom_window_size(image_width: usize, image_height: usize, work_area: &RECT) -> (i32, i32) {
-    // A-09: 尺寸缺失（历史条目 / LAN 同步条目 image_width==0）时退回普通图片预览尺寸，
-    //       绝不能落到比普通预览还小的退化尺寸。
+    // 尺寸缺失时退回普通图片预览尺寸，异步解码完成后再按原图尺寸调整。
     if image_width == 0 || image_height == 0 {
         return (PREVIEW_W_IMAGE, PREVIEW_H_IMAGE);
     }
-    let avail_w = ((work_area.right - work_area.left) * 8 / 10 - ZOOM_CHROME_W).max(ZOOM_MIN_W);
-    let avail_h = ((work_area.bottom - work_area.top) * 8 / 10 - ZOOM_CHROME_H).max(ZOOM_MIN_H);
+    let avail_w = ((work_area.right - work_area.left) * 8 / 10).max(1);
+    let avail_h = ((work_area.bottom - work_area.top) * 8 / 10).max(1);
 
-    // A-06: 等比收缩，只缩不放。scale_num 三项取最小分别对应
-    // 「宽度受限」「高度受限」「原图更小不放大」。用 i64 避免中间乘积溢出。
+    // 等比收缩，只缩不放；用 i64 避免中间乘积溢出。
     let (iw, ih) = (image_width as i64, image_height as i64);
     let scale_num = (avail_w as i64 * ih).min(avail_h as i64 * iw).min(iw * ih);
     let w = ((scale_num / ih.max(1)) as i32).max(1);
     let h = ((scale_num / iw.max(1)) as i32).max(1);
 
-    (
-        (w + ZOOM_CHROME_W).max(ZOOM_MIN_W),
-        (h + ZOOM_CHROME_H).max(ZOOM_MIN_H),
-    )
+    (w, h)
+}
+
+fn preview_window_position(
+    cursor_x: i32,
+    cursor_y: i32,
+    width: i32,
+    height: i32,
+    work_area: &RECT,
+) -> (i32, i32) {
+    let mut x = cursor_x + 16;
+    let mut y = cursor_y + 22;
+    if x + width > work_area.right {
+        x = work_area.right - width;
+    }
+    if y + height > work_area.bottom {
+        y = work_area.bottom - height;
+    }
+    (x.max(work_area.left), y.max(work_area.top))
 }
 
 fn limit_preview_text(text: &str, max_lines: usize, max_chars: usize) -> String {
@@ -354,7 +410,10 @@ pub(crate) unsafe fn hide_hover_preview() {
             (*ptr).image_width = 0;
             (*ptr).image_height = 0;
             (*ptr).loading_item_id = 0;
+            (*ptr).cursor_x = i32::MIN;
+            (*ptr).cursor_y = i32::MIN;
             (*ptr).zoom_mode = false;
+            (*ptr).image_preview = false;
         }
         platform_window::hide(hwnd);
     }
@@ -376,7 +435,7 @@ fn spawn_hover_image_load(hwnd: HWND, item: ClipItem) {
     std::thread::spawn(move || {
         let payload = Box::new(HoverPreviewImageResult {
             item_id: item.id,
-            image: ensure_item_image_bytes(&item),
+            image: ensure_hover_preview_image_bytes(&item),
         });
         unsafe {
             let _ = post_boxed_message(hwnd_raw, WM_HOVER_IMAGE_READY, 0, payload);
@@ -384,12 +443,7 @@ fn spawn_hover_image_load(hwnd: HWND, item: ClipItem) {
     });
 }
 
-pub(crate) unsafe fn show_hover_preview(
-    item: &ClipItem,
-    cursor_x: i32,
-    cursor_y: i32,
-    zoom: bool,
-) {
+pub(crate) unsafe fn show_hover_preview(item: &ClipItem, cursor_x: i32, cursor_y: i32, zoom: bool) {
     let hwnd = preview_hwnd();
     if !platform_window::exists(hwnd) {
         return;
@@ -399,53 +453,75 @@ pub(crate) unsafe fn show_hover_preview(
         return;
     }
 
-    let markdown_file_preview = if item.kind == ClipKind::Files {
+    let data = &mut *ptr;
+    data.cursor_x = cursor_x;
+    data.cursor_y = cursor_y;
+
+    let image_preview = item_has_image_preview(item);
+    let markdown_file_preview = if item.kind == ClipKind::Files && !image_preview {
         item.file_paths
             .as_ref()
             .and_then(|paths| markdown_file_preview_text(paths))
     } else {
         None
     };
-    let header = match item.kind {
-        ClipKind::Image => tr("图片预览", "Image Preview").to_string(),
-        ClipKind::Files if markdown_file_preview.is_some() => {
-            tr("Markdown 预览", "Markdown Preview").to_string()
-        }
-        ClipKind::Files => tr("文件预览", "File Preview").to_string(),
-        ClipKind::Phrase => tr("短语预览", "Phrase Preview").to_string(),
-        ClipKind::Text if item.rich_text_html.is_some() => {
-            tr("富文本预览", "Rich Text Preview").to_string()
-        }
-        ClipKind::Text => tr("文本预览", "Text Preview").to_string(),
-    };
-    let body = match item.kind {
-        ClipKind::Text | ClipKind::Phrase => {
-            if let Some(html) = item.rich_text_html.as_deref() {
-                let text = rich_text_preview_text(
-                    html,
-                    item.text.as_deref().unwrap_or(item.preview.as_str()),
-                    PREVIEW_TEXT_MAX_LINES + 1,
-                    PREVIEW_TEXT_MAX_CHARS + 1,
-                );
-                limit_preview_text(&text, PREVIEW_TEXT_MAX_LINES, PREVIEW_TEXT_MAX_CHARS)
-            } else {
-                limit_preview_text(
-                    item.text.as_deref().unwrap_or(item.preview.as_str()),
-                    PREVIEW_TEXT_MAX_LINES,
-                    PREVIEW_TEXT_MAX_CHARS,
-                )
+    let header = if image_preview {
+        tr("图片预览", "Image Preview").to_string()
+    } else {
+        match item.kind {
+            ClipKind::Image => tr("图片预览", "Image Preview").to_string(),
+            ClipKind::Files if markdown_file_preview.is_some() => {
+                tr("Markdown 预览", "Markdown Preview").to_string()
             }
+            ClipKind::Files => tr("文件预览", "File Preview").to_string(),
+            ClipKind::Phrase => tr("短语预览", "Phrase Preview").to_string(),
+            ClipKind::Text if item.rich_text_html.is_some() => {
+                tr("富文本预览", "Rich Text Preview").to_string()
+            }
+            ClipKind::Text => tr("文本预览", "Text Preview").to_string(),
         }
-        ClipKind::Files => markdown_file_preview.unwrap_or_else(|| {
-            item.file_paths
-                .as_ref()
-                .map(|paths| limit_file_preview(paths, PREVIEW_FILE_MAX_ITEMS))
-                .unwrap_or_else(|| item.preview.clone())
-        }),
-        ClipKind::Image => String::new(),
     };
-    let image_shape = if item.kind == ClipKind::Image {
-        Some((item.image_width, item.image_height))
+    let body = if image_preview {
+        String::new()
+    } else {
+        match item.kind {
+            ClipKind::Text | ClipKind::Phrase => {
+                if let Some(html) = item.rich_text_html.as_deref() {
+                    let text = rich_text_preview_text(
+                        html,
+                        item.text.as_deref().unwrap_or(item.preview.as_str()),
+                        PREVIEW_TEXT_MAX_LINES + 1,
+                        PREVIEW_TEXT_MAX_CHARS + 1,
+                    );
+                    limit_preview_text(&text, PREVIEW_TEXT_MAX_LINES, PREVIEW_TEXT_MAX_CHARS)
+                } else {
+                    limit_preview_text(
+                        item.text.as_deref().unwrap_or(item.preview.as_str()),
+                        PREVIEW_TEXT_MAX_LINES,
+                        PREVIEW_TEXT_MAX_CHARS,
+                    )
+                }
+            }
+            ClipKind::Files => markdown_file_preview.unwrap_or_else(|| {
+                item.file_paths
+                    .as_ref()
+                    .map(|paths| limit_file_preview(paths, PREVIEW_FILE_MAX_ITEMS))
+                    .unwrap_or_else(|| item.preview.clone())
+            }),
+            ClipKind::Image => String::new(),
+        }
+    };
+    let image_shape = if image_preview {
+        if item.image_width > 0 && item.image_height > 0 {
+            Some((item.image_width, item.image_height))
+        } else if data.item_id == item.id {
+            data.image
+                .as_ref()
+                .map(|(_, width, height)| (*width, *height))
+                .or(Some((0, 0)))
+        } else {
+            Some((0, 0))
+        }
     } else {
         None
     };
@@ -454,36 +530,36 @@ pub(crate) unsafe fn show_hover_preview(
         x: cursor_x,
         y: cursor_y,
     });
-    let (w, h) = if zoom && image_shape.is_some() {
-        image_zoom_window_size(item.image_width, item.image_height, &wa)
-    } else if image_shape.is_some() {
+    let (w, h) = if zoom && image_preview {
+        let (image_width, image_height) = image_shape.unwrap_or((0, 0));
+        image_zoom_window_size(image_width, image_height, &wa)
+    } else if image_preview {
         (PREVIEW_W_IMAGE, PREVIEW_H_IMAGE)
     } else {
         (PREVIEW_W_TEXT, PREVIEW_H_TEXT)
     };
-    let mut x = cursor_x + 16;
-    let mut y = cursor_y + 22;
-    if x + w > wa.right {
-        x = wa.right - w;
-    }
-    if y + h > wa.bottom {
-        y = wa.bottom - h;
-    }
-    x = x.max(wa.left);
-    y = y.max(wa.top);
+    let (x, y) = preview_window_position(cursor_x, cursor_y, w, h, &wa);
 
-    let data = &mut *ptr;
     let same_image_shape = image_shape == Some((data.image_width, data.image_height));
-    // 除 zoom_mode 外的内容是否完全相同。header/body/image_shape 都由 item 派生，
-    // 因此该标志为真 ⟺ 仍是同一条目（A-14：据此复用已解码位图）。
+    // 同一条目的图片字节和加载状态可复用；图片文件条目通过 image_preview
+    // 与普通文件预览区分，避免同一个 id 在模式切换时误复用旧卡片内容。
     let same_content_ignoring_zoom = data.item_id == item.id
         && data.header == header
         && data.body == body
+        && data.image_preview == image_preview
         && same_image_shape;
     let same_content = same_content_ignoring_zoom && data.zoom_mode == zoom;
     let same_geometry =
         data.last_x == x && data.last_y == y && data.last_w == w && data.last_h == h;
     let visible = platform_window::is_visible(hwnd);
+
+    if !visible || data.zoom_mode != zoom || data.image_preview != image_preview {
+        if zoom && image_preview {
+            platform_appearance::set_square_corners(hwnd);
+        } else {
+            platform_appearance::set_rounded_corners(hwnd);
+        }
+    }
 
     if visible && same_content && same_geometry {
         return;
@@ -506,9 +582,7 @@ pub(crate) unsafe fn show_hover_preview(
         return;
     }
 
-    // A-14：同一条目、仅 zoom_mode 切换（悬浮小预览 <-> 放大查看）。
-    // 绝不能重置 data.image / loading_item_id —— 那会丢弃已解码位图并触发无谓重载。
-    // 只更新几何与模式，复用现有位图并重绘。
+    // 同一条目、仅 zoom_mode 切换时复用已解码位图，避免无谓重载。
     if visible && same_content_ignoring_zoom {
         data.last_x = x;
         data.last_y = y;
@@ -528,7 +602,7 @@ pub(crate) unsafe fn show_hover_preview(
         return;
     }
 
-    let image = if item.kind == ClipKind::Image {
+    let image = if image_preview {
         if let Some(bytes) = item.image_bytes.as_ref() {
             Some((bytes.clone(), item.image_width, item.image_height))
         } else {
@@ -549,6 +623,7 @@ pub(crate) unsafe fn show_hover_preview(
     data.image = image;
     data.image_width = image_shape.map(|shape| shape.0).unwrap_or(0);
     data.image_height = image_shape.map(|shape| shape.1).unwrap_or(0);
+    data.image_preview = image_preview;
     data.last_x = x;
     data.last_y = y;
     data.last_w = w;
@@ -577,7 +652,7 @@ mod tests {
     };
     use windows_sys::Win32::Foundation::RECT;
 
-    /// 1920×1080 工作区：avail_w=(1536-24).max(240)=1512，avail_h=(864-52).max(180)=812。
+    /// 1920×1080 工作区：可用图片画布为 1536×864。
     fn work_area_1080p() -> RECT {
         RECT {
             left: 0,
@@ -589,42 +664,39 @@ mod tests {
 
     #[test]
     fn image_zoom_size_keeps_aspect_ratio_for_large_image() {
-        // 4000×3000（高度受限）：scale_num=min(1512*3000, 812*4000, 4000*3000)=3_248_000
-        // w=3_248_000/3000=1082, h=3_248_000/4000=812 → 加 chrome (24,52) → (1106, 864)。
+        // 4000×3000（高度受限）：scale_num=min(1536*3000, 864*4000, 4000*3000)=3_456_000
+        // w=3_456_000/3000=1152, h=3_456_000/4000=864，窗口尺寸就是图片画布。
         assert_eq!(
             image_zoom_window_size(4000, 3000, &work_area_1080p()),
-            (1106, 864)
+            (1152, 864)
         );
     }
 
     #[test]
     fn image_zoom_size_is_one_to_one_for_small_image() {
-        // 800×600（原图更小，只缩不放）：scale_num=min(907200, 649600, 480000)=480_000
-        // w=480_000/600=800, h=480_000/800=600 → 加 chrome → (824, 652)，即 1:1 原尺寸。
+        // 800×600（原图更小，只缩不放），窗口保持 1:1 原尺寸。
         assert_eq!(
             image_zoom_window_size(800, 600, &work_area_1080p()),
-            (824, 652)
+            (800, 600)
         );
     }
 
     #[test]
-    fn image_zoom_size_lifts_tiny_image_to_minimum() {
-        // 100×100：内容 100×100 + chrome=(124,152)，低于 (ZOOM_MIN_W,ZOOM_MIN_H)=(240,180)
-        // → 最终 max 钳位抬升到 (240, 180)。
-        // （审计正文示例写 124×152 漏算了末行的 min 钳位，此处以代码语义为准。）
+    fn image_zoom_size_keeps_tiny_image_one_to_one() {
+        // 无外框时，小图也保持原尺寸，不人为增加最小卡片尺寸。
         assert_eq!(
             image_zoom_window_size(100, 100, &work_area_1080p()),
-            (240, 180)
+            (100, 100)
         );
     }
 
     #[test]
     fn image_zoom_size_handles_panorama() {
-        // 4000×400（宽度受限）：scale_num=min(1512*400, 812*4000, 4000*400)=604_800
-        // w=604_800/400=1512, h=604_800/4000=151 → 加 chrome → (1536, 203)。
+        // 4000×400（宽度受限）：scale_num=min(1536*400, 864*4000, 4000*400)=614_400
+        // w=614_400/400=1536, h=614_400/4000=153。
         assert_eq!(
             image_zoom_window_size(4000, 400, &work_area_1080p()),
-            (1536, 203)
+            (1536, 153)
         );
     }
 

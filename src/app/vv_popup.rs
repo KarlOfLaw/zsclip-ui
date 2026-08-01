@@ -374,9 +374,9 @@ unsafe fn vv_popup_move_near_target(state: &AppState, popup: HWND) -> bool {
     if focus_hwnd.is_null() {
         return false;
     }
-    // A-10: 统一以弹窗自身 HWND 的 DPI/字体度量为准，与 WM_PAINT 使用的布局完全一致。
-    // 首次定位时弹窗可能仍在源显示器；落位后本函数会被再次调用，届时以目标显示器 DPI 复算。
-    let layout = vv_popup_layout_for_window(popup);
+    // A-10: 以目标输入窗口所在显示器的 DPI 计算布局；弹窗尚未落位时，
+    // 不能依赖它上一次所在显示器的 DPI，否则首次显示会先用错误尺寸再跳动。
+    let layout = vv_popup_layout_for_window(focus_hwnd);
     let mut wa = platform_monitor::nearest_work_rect_for_window(focus_hwnd);
     let height = layout.height(state.vv_popup_items.len());
     let caret_anchor = vv_accessible_caret_anchor(focus_hwnd, height, &wa)
@@ -456,10 +456,6 @@ pub(super) unsafe fn vv_popup_show(hwnd: HWND, state: &mut AppState, target: HWN
     state.vv_popup_replaces_ime = false;
     vv_popup_sync_hook_state(true, target);
     let popup = vv_popup_hwnd(hwnd);
-    if !vv_popup_move_near_target(state, popup) {
-        vv_popup_hide(hwnd, state);
-        return false;
-    }
     let focus_hwnd = vv_focus_hwnd_for_target(target);
     let ime_replaced_trigger = if focus_hwnd.is_null() {
         false
@@ -473,10 +469,15 @@ pub(super) unsafe fn vv_popup_show(hwnd: HWND, state: &mut AppState, target: HWN
         )
         .is_some()
     };
+    // Esc 会关闭输入法候选窗并可能改变可用锚点；先完成状态切换，
+    // 再只定位/显示一次 VV 弹窗，避免用户看到中间位置。
     send_escape_key();
     state.vv_popup_replaces_ime = ime_replaced_trigger;
+    if !vv_popup_move_near_target(state, popup) {
+        vv_popup_hide(hwnd, state);
+        return false;
+    }
     platform_gdi::invalidate_rect(popup, null(), 1);
-    let _ = vv_popup_move_near_target(state, popup);
     true
 }
 
@@ -580,7 +581,6 @@ unsafe extern "system" fn vv_popup_wnd_proc(
                         let _ = WindowsPasteTargetHost::new()
                             .force_paste_target_foreground(state.vv_popup_target);
                         vv_popup_sync_hook_state(true, state.vv_popup_target);
-                        vv_popup_move_near_target(state, hwnd);
                         platform_gdi::invalidate_rect(hwnd, null(), 1);
                         let _ = vv_popup_move_near_target(state, hwnd);
                     }

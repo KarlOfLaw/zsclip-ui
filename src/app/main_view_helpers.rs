@@ -32,8 +32,7 @@ pub(super) fn pt_in_rect(x: i32, y: i32, rc: &RECT) -> bool {
 }
 
 pub(super) fn row_supports_image_preview(item: &ClipItem, settings: &AppSettings) -> bool {
-    settings.image_preview_enabled
-        && (item.kind == ClipKind::Image || image_file_preview_path(item).is_some())
+    settings.image_preview_enabled && item_has_image_preview(item)
 }
 
 /// 命中测试：给定主窗口客户区物理像素坐标 `(x, y)`，返回其所落缩略图对应的行索引。

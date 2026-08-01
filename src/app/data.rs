@@ -62,6 +62,25 @@ pub(super) fn image_file_preview_path(item: &ClipItem) -> Option<&str> {
     paths.first().map(String::as_str)
 }
 
+/// Whether an item has an image representation suitable for the hover preview.
+///
+/// File clipboard entries remain `ClipKind::Files` for paste semantics, but a
+/// selection containing only image files also has a real image thumbnail and
+/// should use the image preview surface when hovered.
+pub(crate) fn item_has_image_preview(item: &ClipItem) -> bool {
+    item.kind == ClipKind::Image || image_file_preview_path(item).is_some()
+}
+
+/// Load the image representation used by the hover preview without changing
+/// the item's clipboard kind or paste behavior.
+pub(crate) fn ensure_hover_preview_image_bytes(item: &ClipItem) -> Option<(Vec<u8>, usize, usize)> {
+    match item.kind {
+        ClipKind::Image => ensure_item_image_bytes(item),
+        ClipKind::Files => image_file_preview_path(item).and_then(load_image_bytes_from_path),
+        ClipKind::Text | ClipKind::Phrase => None,
+    }
+}
+
 pub(super) fn image_file_preview_extra_count(item: &ClipItem) -> usize {
     if image_file_preview_path(item).is_none() {
         return 0;
@@ -1730,6 +1749,7 @@ mod tests {
             image_file_preview_path(&item),
             Some(r"C:\Pictures\first.PNG")
         );
+        assert!(item_has_image_preview(&item));
         assert_eq!(image_file_preview_extra_count(&item), 1);
     }
 
@@ -1738,6 +1758,7 @@ mod tests {
         let item = file_item(&[r"C:\Pictures\first.png", r"C:\Notes\readme.txt"]);
 
         assert_eq!(image_file_preview_path(&item), None);
+        assert!(!item_has_image_preview(&item));
         assert_eq!(image_file_preview_extra_count(&item), 0);
     }
 

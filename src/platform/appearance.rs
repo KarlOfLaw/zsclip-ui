@@ -136,6 +136,12 @@ pub(crate) fn set_rounded_corners(hwnd: HWND) {
     let _ = set_dwm_u32_attribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND);
 }
 
+pub(crate) fn set_square_corners(hwnd: HWND) {
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_DONOTROUND: u32 = 1;
+    let _ = set_dwm_u32_attribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
+}
+
 pub(crate) unsafe fn init_dark_mode_for_process() {
     let lib = LoadLibraryW(wide_null("uxtheme.dll").as_ptr());
     if lib.is_null() {
