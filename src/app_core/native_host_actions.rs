@@ -587,7 +587,7 @@ pub(crate) fn native_host_vv_popup_render_plan_for_projection(
             label: native_host_projected_clip_row_title(item),
         })
         .collect::<Vec<_>>();
-    layout.render_plan(client_rect, &strings, group_label, &render_items)
+    layout.render_plan(client_rect, &strings, group_label, &render_items, None)
 }
 
 pub(crate) fn native_host_vv_select_event(index: usize) -> ApplicationEvent {
