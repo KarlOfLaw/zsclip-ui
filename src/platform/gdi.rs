@@ -3,11 +3,11 @@ use windows_sys::Win32::{
     Graphics::Gdi::{
         BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection,
         CreateFontW, CreateRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
-        FillRect, FrameRect, GetDC, GetDeviceCaps, GetStockObject, IntersectClipRect,
-        InvalidateRect, RedrawWindow, ReleaseDC, RestoreDC, RoundRect, SaveDC, SelectObject,
-        SetBkColor, SetBkMode, SetBrushOrgEx, SetStretchBltMode, SetTextColor, StretchDIBits,
-        BITMAPINFO, BITMAPINFOHEADER, BI_RGB, COLORONCOLOR, DIB_RGB_COLORS, HALFTONE, HBITMAP,
-        HBRUSH, HDC, HFONT, HGDIOBJ, HRGN, NULL_PEN, PAINTSTRUCT, SRCCOPY,
+        FillRect, FrameRect, GetDC, GetDeviceCaps, GetStockObject, GetTextMetricsW,
+        IntersectClipRect, InvalidateRect, RedrawWindow, ReleaseDC, RestoreDC, RoundRect, SaveDC,
+        SelectObject, SetBkColor, SetBkMode, SetBrushOrgEx, SetStretchBltMode, SetTextColor,
+        StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, COLORONCOLOR, DIB_RGB_COLORS, HALFTONE,
+        HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, HRGN, NULL_PEN, PAINTSTRUCT, SRCCOPY, TEXTMETRICW,
     },
     UI::WindowsAndMessaging::{DrawIconEx, DI_NORMAL, HICON},
 };
@@ -369,6 +369,17 @@ pub(crate) fn redraw_window(
 
 pub(crate) fn get_device_caps(dc: HDC, index: i32) -> i32 {
     unsafe { GetDeviceCaps(dc, index) }
+}
+
+/// 读取当前选入 `dc` 的字体度量。返回 `(tmHeight, tmExternalLeading)`（物理像素），
+/// 失败时返回 `None`。调用方需先 `select_object` 目标字体，用后恢复原字体。
+pub(crate) fn get_text_metrics(dc: HDC) -> Option<(i32, i32)> {
+    let mut tm: TEXTMETRICW = unsafe { core::mem::zeroed() };
+    if unsafe { GetTextMetricsW(dc, &mut tm) } != 0 {
+        Some((tm.tmHeight, tm.tmExternalLeading))
+    } else {
+        None
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

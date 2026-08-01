@@ -3,6 +3,11 @@ use super::prelude::*;
 const VV_POPUP_CLASS: &str = "ZsClipVvPopup";
 const VV_IMM_POINT_MAX_X_DRIFT: i32 = 120;
 const VV_IMM_POINT_MAX_Y_DRIFT: i32 = 180;
+/// VV 弹窗行文本（RowPreview/RowIndex）的逻辑字号，需与 `render_plan` 中的 `size: 12` 保持一致。
+/// 布局字体度量以此字号量取，确保 `row_h` 恰好容纳实际行文本。
+const VV_POPUP_ROW_TEXT_SIZE: i32 = 12;
+/// 常规（非粗体）字重，对应 `render_plan` 中 RowPreview 的 `bold: false`。
+const VV_POPUP_ROW_TEXT_WEIGHT: i32 = 400;
 
 #[derive(Copy, Clone)]
 struct VvOverlayAnchor {
@@ -92,7 +97,25 @@ fn vv_popup_layout() -> MainVvPopupLayout {
 }
 
 fn vv_popup_layout_for_window(hwnd: HWND) -> MainVvPopupLayout {
-    vv_popup_layout().scaled(unsafe { platform_dpi::layout_dpi_for_window(hwnd) })
+    let dpi = unsafe { platform_dpi::layout_dpi_for_window(hwnd) };
+    // T2: 用 GetTextMetrics 量取 UiText 行文本在当前 HDC/DPI 下的实际行高，
+    // 驱动 from_metrics，使 row_h 随字体/DPI/用户字号自适应。无 HDC / 度量失败则回退。
+    let hdc = platform_gdi::get_dc(hwnd);
+    if !hdc.is_null() {
+        let line_h = unsafe {
+            measure_ui_text_line_height(
+                hdc as _,
+                "",
+                VV_POPUP_ROW_TEXT_SIZE,
+                VV_POPUP_ROW_TEXT_WEIGHT,
+            )
+        };
+        platform_gdi::release_dc(hwnd, hdc);
+        if let Some(line_h) = line_h {
+            return MainVvPopupLayout::from_metrics(line_h, dpi);
+        }
+    }
+    vv_popup_layout().scaled(dpi)
 }
 
 unsafe fn draw_vv_popup_text_command(hdc: HDC, command: &MainVvPopupTextCommand, th: Theme) {
@@ -133,6 +156,8 @@ fn vv_popup_rebuild_items(state: &mut AppState) {
             .enumerate()
             .map(|(i, item)| VvPopupEntry { index: i + 1, item })
             .collect();
+    // 条目重建后清除旧的悬停高亮，避免残留在已变动的行上。
+    state.vv_popup_hover_row = None;
 }
 
 unsafe fn vv_popup_show_group_menu(hwnd: HWND, state: &AppState) -> Option<i64> {
@@ -349,7 +374,9 @@ unsafe fn vv_popup_move_near_target(state: &AppState, popup: HWND) -> bool {
     if focus_hwnd.is_null() {
         return false;
     }
-    let layout = vv_popup_layout_for_window(focus_hwnd);
+    // A-10: 统一以弹窗自身 HWND 的 DPI/字体度量为准，与 WM_PAINT 使用的布局完全一致。
+    // 首次定位时弹窗可能仍在源显示器；落位后本函数会被再次调用，届时以目标显示器 DPI 复算。
+    let layout = vv_popup_layout_for_window(popup);
     let mut wa = platform_monitor::nearest_work_rect_for_window(focus_hwnd);
     let height = layout.height(state.vv_popup_items.len());
     let caret_anchor = vv_accessible_caret_anchor(focus_hwnd, height, &wa)
@@ -509,6 +536,7 @@ unsafe extern "system" fn vv_popup_wnd_proc(
                     &strings,
                     &vv_popup_group_name(state),
                     &render_items,
+                    state.vv_popup_hover_row,
                 );
                 #[cfg(feature = "vv-paste")]
                 {
@@ -561,6 +589,29 @@ unsafe extern "system" fn vv_popup_wnd_proc(
                     platform_window::post_hwnd_message(main_hwnd, WM_VV_SELECT, row, 0);
                 }
                 MainVvPopupHit::None => {}
+            }
+            0
+        }
+        WM_MOUSEMOVE => {
+            // T3: 跟踪鼠标所在行，命中行序号提到 Text 色（低成本焦点反馈）。
+            let main_hwnd = platform_window::user_data(hwnd) as HWND;
+            let ptr = get_state_ptr(main_hwnd);
+            if ptr.is_null() {
+                return 0;
+            }
+            let state = &mut *ptr;
+            let x = get_x_lparam(lparam);
+            let y = get_y_lparam(lparam);
+            let layout = platform_window::client_rect(hwnd)
+                .map(|rc| vv_popup_layout_for_window(hwnd).with_width(rc.right - rc.left))
+                .unwrap_or_else(|| vv_popup_layout_for_window(hwnd));
+            let hover_row = match layout.hit_test(x, y, state.vv_popup_items.len()) {
+                MainVvPopupHit::Row(row) => Some(row),
+                _ => None,
+            };
+            if state.vv_popup_hover_row != hover_row {
+                state.vv_popup_hover_row = hover_row;
+                platform_gdi::invalidate_rect(hwnd, null(), 1);
             }
             0
         }

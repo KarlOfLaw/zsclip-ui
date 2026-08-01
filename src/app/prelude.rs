@@ -160,7 +160,7 @@ pub(in crate::app) use crate::app_core::menu_ids::{
     TRAY_TOGGLE as IDM_TRAY_TOGGLE,
 };
 pub(in crate::app) use crate::app_core::{
-    clamp_window_pos_to_rect, clip_kind_filter_options_for_tab, main_copy_selection_plan,
+    clip_kind_filter_options_for_tab, main_copy_selection_plan,
     main_group_filter_menu_plan, main_group_filter_popup_entries,
     main_group_filter_selection_for_id, main_host_action_for_command, main_host_execution_plan,
     main_hotkey_registration_plan, main_paste_completion_plan,
@@ -236,7 +236,9 @@ pub(in crate::app) use crate::cloud_sync::{
     CloudSyncPaths,
 };
 pub(in crate::app) use crate::db_runtime::{close_db, ensure_db, with_db, with_db_mut};
-pub(in crate::app) use crate::hover_preview::{hide_hover_preview, show_hover_preview};
+pub(in crate::app) use crate::hover_preview::{
+    hide_hover_preview, hover_zoom_active, show_hover_preview,
+};
 pub(in crate::app) use crate::i18n::{app_title, tr, translate};
 pub(in crate::app) use crate::lan_sync::{self, LanClipEnvelope, LanFileMeta};
 #[cfg(feature = "mail-merge")]
@@ -334,7 +336,7 @@ pub(in crate::app) use crate::win_system_params::{
 pub(in crate::app) use crate::win_system_ui::{
     create_settings_button as settings_create_btn, create_settings_fonts, draw_settings_chrome,
     draw_settings_content, draw_settings_nav_item, draw_settings_scrollbar,
-    draw_settings_viewport_mask, get_x_lparam, get_y_lparam,
+    draw_settings_viewport_mask, get_x_lparam, get_y_lparam, measure_ui_text_line_height,
     set_settings_font as settings_set_font, set_settings_viewport_child_visible,
     settings_action_for_control, settings_child_visible, settings_command_for_control,
     settings_dropdown_index_for_max_items, settings_dropdown_index_for_pos_mode,

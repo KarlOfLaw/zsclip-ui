@@ -510,7 +510,7 @@ const HOTKEY_TITLES: [&str; 3] = [
 
 const GENERAL_FORM_SECTIONS: [SettingsFormCardSpec; 5] = [
     SettingsFormCardSpec {
-        rows: 10,
+        rows: 11,
         extra_px: 0,
     },
     SettingsFormCardSpec {

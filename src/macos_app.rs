@@ -11481,6 +11481,7 @@ mod tests {
                     label: "second".to_string(),
                 },
             ],
+            None,
         );
 
         assert_eq!(

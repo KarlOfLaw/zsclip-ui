@@ -291,6 +291,8 @@ pub(super) unsafe fn paint_main_window(hwnd: HWND) {
         list_clip_rc.right,
         list_clip_rc.bottom,
     );
+    // T4: 每帧重建缩略图命中矩形（客户区物理像素），作为放大命中判定的单一真源。
+    state.row_preview_rects.clear();
     if state.visible_count() == 0 {
         draw_main_text_commands(
             memdc,
@@ -337,6 +339,8 @@ pub(super) unsafe fn paint_main_window(hwnd: HWND) {
             }
 
             if let Some(preview_rc) = row_content.preview_rect {
+                // T4: 记录本行缩略图命中矩形（客户区物理像素）供放大命中判定使用。
+                state.row_preview_rects.push((i, preview_rc));
                 let preview_rc: RECT = preview_rc.into();
                 let thumb_px = ((preview_rc.right - preview_rc.left)
                     .max(preview_rc.bottom - preview_rc.top)

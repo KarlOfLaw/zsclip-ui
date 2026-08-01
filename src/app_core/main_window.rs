@@ -1967,6 +1967,8 @@ pub(crate) struct MainVvPopupTextCommand {
     pub(crate) text: String,
     pub(crate) rect: UiRect,
     pub(crate) color: MainThemeRole,
+    /// 字号语义：逻辑像素（96 DPI 基准）。实际 DPI 缩放由字体层
+    /// （`create_scaled_font_for_hdc`）唯一负责，布局层不得预先缩放。
     pub(crate) size: i32,
     pub(crate) bold: bool,
     pub(crate) horizontal_align: HorizontalAlign,
@@ -1992,6 +1994,11 @@ pub(crate) struct MainVvPopupRenderStrings {
     pub(crate) empty: String,
 }
 
+/// VV 弹窗的设计基线行高（96 DPI）。`scale_value` 以此为分母，
+/// 确保 `row_h` 调整时派生尺寸保持等比，不引入隐式乘子。
+/// 今后任何人改 `row_h` 或默认 `MainVvPopupLayout::row_h`，都必须同步改此常量。
+const VV_BASE_ROW_H: i32 = 36;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MainVvPopupLayout {
     pub(crate) width: i32,
@@ -2011,7 +2018,7 @@ impl Default for MainVvPopupLayout {
 
 impl MainVvPopupLayout {
     fn scale_value(self, value: i32) -> i32 {
-        ((value * self.row_h.max(1)) + 15) / 30
+        ((value * self.row_h.max(1)) + VV_BASE_ROW_H / 2) / VV_BASE_ROW_H
     }
 
     pub(crate) fn scaled(self, dpi: u32) -> Self {
@@ -2031,6 +2038,35 @@ impl MainVvPopupLayout {
             width: width.max(self.width),
             ..self
         }
+    }
+
+    /// 依据实测文本行高构造布局：`row_h` 由行文本高度撑开，而非硬编码常量，
+    /// 从而对任意字体/DPI/用户字号自适应（§3.2.3）。
+    ///
+    /// - `text_line_h`：`UiText` 行文本在当前 HDC/DPI 下的物理行高
+    ///   （`tmHeight + tmExternalLeading`）。
+    /// - `dpi`：仅用于派生弹窗宽度（宽度与行高解耦，跟随硬编码基线等比缩放）。
+    pub(crate) fn from_metrics(text_line_h: i32, dpi: u32) -> Self {
+        let pad_v = (text_line_h / 3).clamp(4, 14); // 上下留白
+        let row_h = (text_line_h + pad_v * 2).max(28);
+        let header_h = row_h * 2 - row_h / 6; // header 与行高联动，修 A-11
+        let layout = Self {
+            width: MainVvPopupLayout::default().scaled(dpi).width,
+            header_h,
+            row_h,
+        };
+        debug_assert!(
+            layout.hint_rect_bottom() <= layout.header_h,
+            "VV header 内容溢出 header_h：hint_bottom={} header_h={}",
+            layout.hint_rect_bottom(),
+            layout.header_h
+        );
+        layout
+    }
+
+    /// `render_plan` 中 Hint 文本矩形的下界（= `s(52)`），用于 header 一致性断言（A-11）。
+    fn hint_rect_bottom(self) -> i32 {
+        self.scale_value(52)
     }
 
     pub(crate) fn height(self, rows: usize) -> i32 {
@@ -2062,7 +2098,8 @@ impl MainVvPopupLayout {
         }
         for row in 0..rows {
             let rect = self.row_rect(row);
-            if y >= rect.top && y < rect.bottom {
+            // A-13: 原判定只比较 y，导致行左右外边距也被算作命中；改用 contains 补 x 轴。
+            if rect.contains(x, y) {
                 return MainVvPopupHit::Row(row);
             }
         }
@@ -2075,6 +2112,7 @@ impl MainVvPopupLayout {
         strings: &MainVvPopupRenderStrings,
         group_name: &str,
         items: &[MainVvPopupRenderItem],
+        highlight_row: Option<usize>,
     ) -> MainVvPopupRenderPlan {
         let s = |value| self.scale_value(value);
         let mut paint_commands = vec![MainPaintCommand::RoundRect {
@@ -2089,7 +2127,7 @@ impl MainVvPopupLayout {
                 text: strings.title.clone(),
                 rect: UiRect::new(s(14), s(10), s(150), s(30)),
                 color: MainThemeRole::Text,
-                size: s(13),
+                size: 13,
                 bold: true,
                 horizontal_align: HorizontalAlign::Start,
                 font: MainFontRole::Display,
@@ -2099,7 +2137,7 @@ impl MainVvPopupLayout {
                 text: strings.hint.clone(),
                 rect: UiRect::new(s(14), s(34), client_rect.right - s(14), s(52)),
                 color: MainThemeRole::TextMuted,
-                size: s(11),
+                size: 11,
                 bold: false,
                 horizontal_align: HorizontalAlign::Start,
                 font: MainFontRole::UiText,
@@ -2128,7 +2166,7 @@ impl MainVvPopupLayout {
                 group_rect.bottom,
             ),
             color: MainThemeRole::Text,
-            size: s(11),
+            size: 11,
             bold: false,
             horizontal_align: HorizontalAlign::Center,
             font: MainFontRole::UiText,
@@ -2143,7 +2181,7 @@ impl MainVvPopupLayout {
                 group_rect.bottom,
             ),
             color: MainThemeRole::TextMuted,
-            size: s(11),
+            size: 11,
             bold: true,
             horizontal_align: HorizontalAlign::Center,
             font: MainFontRole::UiText,
@@ -2160,7 +2198,7 @@ impl MainVvPopupLayout {
                     self.header_h + s(48),
                 ),
                 color: MainThemeRole::TextMuted,
-                size: s(12),
+                size: 12,
                 bold: true,
                 horizontal_align: HorizontalAlign::Center,
                 font: MainFontRole::UiText,
@@ -2168,20 +2206,27 @@ impl MainVvPopupLayout {
         } else {
             for (row, item) in items.iter().enumerate() {
                 let row_rect = self.row_rect(row);
-                // 简约序号：去掉气泡背景，纯文本数字右对齐在固定宽度序号区内
+                let is_highlight = highlight_row == Some(row);
+                // 简约序号：无气泡背景，纯文本数字居中于固定宽度序号区内。
+                // 字号与正文同级（12 逻辑 px）、非粗体，视觉权重低于正文；
+                // 命中行序号提到 Text 色，作低成本焦点反馈。
                 let index_rect = UiRect::new(
                     row_rect.left,
                     row_rect.top,
-                    row_rect.left + s(24),
+                    row_rect.left + s(20),
                     row_rect.bottom,
                 );
                 text_commands.push(MainVvPopupTextCommand {
                     role: MainVvPopupTextRole::RowIndex,
                     text: item.index.to_string(),
                     rect: index_rect,
-                    color: MainThemeRole::TextMuted,
-                    size: s(13),
-                    bold: true,
+                    color: if is_highlight {
+                        MainThemeRole::Text
+                    } else {
+                        MainThemeRole::TextMuted
+                    },
+                    size: 12,
+                    bold: false,
                     horizontal_align: HorizontalAlign::Center,
                     font: MainFontRole::UiText,
                 });
@@ -2189,13 +2234,13 @@ impl MainVvPopupLayout {
                     role: MainVvPopupTextRole::RowPreview,
                     text: item.label.clone(),
                     rect: UiRect::new(
-                        row_rect.left + s(32),
+                        row_rect.left + s(28),
                         row_rect.top,
                         row_rect.right,
                         row_rect.bottom,
                     ),
                     color: MainThemeRole::Text,
-                    size: s(12),
+                    size: 12,
                     bold: false,
                     horizontal_align: HorizontalAlign::Start,
                     font: MainFontRole::UiText,
@@ -4044,6 +4089,7 @@ impl MainUiLayout {
             }
         }
 
+        // 修饰键多选优先于粘贴，保持既有 Ctrl/Shift 多选语义。
         if modifiers.ctrl || modifiers.shift {
             return MainRowReleaseAction::Select { row, modifiers };
         }
@@ -5368,31 +5414,57 @@ mod tests {
     fn main_vv_popup_layout_describes_size_rects_and_hits() {
         let layout = MainVvPopupLayout::default();
         assert_eq!(MAIN_VV_POPUP_MAX_ITEMS, 9);
-        assert_eq!(layout.height(0), 118);
-        assert_eq!(layout.height(3), 190);
-        assert_eq!(layout.group_rect(), UiRect::new(204, 12, 367, 41));
-        assert_eq!(layout.row_rect(0), UiRect::new(14, 70, 370, 104));
-        assert_eq!(layout.row_rect(2), UiRect::new(14, 142, 370, 176));
+        // T1 修复魔法分母后，100% DPI 下 s(v)==v（恒等映射）。
+        // height(0) = header_h(58) + s(20)=20 + max(1,0)*row_h(36) = 114
+        assert_eq!(layout.height(0), 114);
+        // height(3) = 58 + 20 + 3*36 = 186
+        assert_eq!(layout.height(3), 186);
+        // group_rect = (384-s(150)=234, s(10)=10, 384-s(14)=370, s(34)=34)
+        assert_eq!(layout.group_rect(), UiRect::new(234, 10, 370, 34));
+        // row_rect(0): top = 58 + s(10)=10 = 68；bottom = 68 + 36 - s(2)=2 = 102
+        assert_eq!(layout.row_rect(0), UiRect::new(12, 68, 372, 102));
+        // row_rect(2): top = 58 + 10 + 2*36 = 140；bottom = 140 + 36 - 2 = 174
+        assert_eq!(layout.row_rect(2), UiRect::new(12, 140, 372, 174));
 
-        assert_eq!(layout.hit_test(220, 18, 3), MainVvPopupHit::Group);
-        assert_eq!(layout.hit_test(1, 70, 3), MainVvPopupHit::Row(0));
+        // T2: hit_test 行判定改用 rect.contains(x,y)，补 x 轴。
+        // group_rect=(234,10,370,34)：命中点取其内部 (300,20)。
+        assert_eq!(layout.hit_test(300, 20, 3), MainVvPopupHit::Group);
+        // row_rect(0)=(12,68,372,102)：内部点 (50,70) 命中第 0 行。
+        assert_eq!(layout.hit_test(50, 70, 3), MainVvPopupHit::Row(0));
+        // A-13 回归：左外边距 x=1 在 row_rect 左界(12)之外，应不命中任何行。
+        assert_eq!(layout.hit_test(1, 70, 3), MainVvPopupHit::None);
+        // row_rect(2)=(12,140,372,174)：内部点 (50,150) 命中第 2 行。
         assert_eq!(layout.hit_test(50, 150, 3), MainVvPopupHit::Row(2));
+        // (50,200) 落在所有行之下，不命中。
         assert_eq!(layout.hit_test(50, 200, 3), MainVvPopupHit::None);
     }
 
     #[test]
     fn main_vv_popup_layout_scales_for_high_dpi_and_resized_width() {
         let layout = MainVvPopupLayout::default().scaled(192);
-        assert_eq!(layout.width, 769);
+        // scaled(192): scale(v)=(v*192+48)/96。
+        // width  = (384*192+48)/96 = 73776/96 = 768（旧断言 769 为预存的取整错误）
+        assert_eq!(layout.width, 768);
+        // header_h = (58*192+48)/96 = 11184/96 = 116
         assert_eq!(layout.header_h, 116);
+        // row_h    = (36*192+48)/96 = 6960/96 = 72
         assert_eq!(layout.row_h, 72);
-        assert_eq!(layout.height(3), 380);
-        assert_eq!(layout.group_rect(), UiRect::new(409, 24, 735, 82));
-        assert_eq!(layout.row_rect(0), UiRect::new(29, 140, 740, 207));
+        // T1 后 scale_value 分母=VV_BASE_ROW_H(36)，row_h=72 → s(v)=(v*72+18)/36=2v。
+        // s(20)=40, s(10)=20, s(12)=24, s(14)=28, s(150)=300, s(34)=68, s(2)=4
+        // height(3) = header_h(116) + s(20)=40 + 3*row_h(72) = 372
+        assert_eq!(layout.height(3), 372);
+        // group_rect = (768-s(150)=468, s(10)=20, 768-s(14)=740, s(34)=68)
+        assert_eq!(layout.group_rect(), UiRect::new(468, 20, 740, 68));
+        // row_rect(0): top = 116 + s(10)=20 = 136；right = 768-s(12)=744；
+        //              bottom = 136 + 72 - s(2)=4 = 204；left = s(12)=24
+        assert_eq!(layout.row_rect(0), UiRect::new(24, 136, 744, 204));
 
         let widened = layout.with_width(900);
-        assert_eq!(widened.group_rect(), UiRect::new(540, 24, 866, 82));
-        assert_eq!(widened.row_rect(0), UiRect::new(29, 140, 871, 207));
+        // width=max(900,768)=900，header_h/row_h 不变。
+        // group_rect = (900-300=600, 20, 900-28=872, 68)
+        assert_eq!(widened.group_rect(), UiRect::new(600, 20, 872, 68));
+        // row_rect(0): left=24, top=136, right=900-24=876, bottom=204
+        assert_eq!(widened.row_rect(0), UiRect::new(24, 136, 876, 204));
     }
 
     #[test]
@@ -5403,7 +5475,7 @@ mod tests {
             hint: "Press 1-9".to_string(),
             empty: "No records".to_string(),
         };
-        let empty = layout.render_plan(UiRect::new(0, 0, 384, 118), &strings, "All", &[]);
+        let empty = layout.render_plan(UiRect::new(0, 0, 384, 114), &strings, "All", &[], None);
         assert_eq!(empty.paint_commands.len(), 3);
         assert_eq!(
             empty
@@ -5432,22 +5504,43 @@ mod tests {
             index: 3,
             label: "row label".to_string(),
         }];
-        let rows = layout.render_plan(UiRect::new(0, 0, 384, 118), &strings, "All", &items);
+        let rows = layout.render_plan(UiRect::new(0, 0, 384, 114), &strings, "All", &items, None);
         // 去掉序号气泡后，paint_commands = 外框 + group fill + group rect = 3
         assert_eq!(rows.paint_commands.len(), 3);
+        // T1: s(v)==v @100% DPI；T3: 序号区宽 s(20)=20 → index_rect 右界 = 12+20 = 32；
+        // 序号非命中默认 TextMuted、size 12、bold false。
         assert_eq!(
             rows.text_commands
                 .iter()
                 .find(|command| command.role == MainVvPopupTextRole::RowIndex)
-                .map(|command| (command.text.as_str(), command.rect, command.color)),
-            Some(("3", UiRect::new(14, 70, 43, 104), MainThemeRole::TextMuted))
+                .map(|command| (
+                    command.text.as_str(),
+                    command.rect,
+                    command.color,
+                    command.size,
+                    command.bold
+                )),
+            Some(("3", UiRect::new(12, 68, 32, 102), MainThemeRole::TextMuted, 12, false))
         );
+        // T3: 正文左偏移 s(28)=28 → 12+28 = 40；右界 = row_rect.right = 372。
         assert_eq!(
             rows.text_commands
                 .iter()
                 .find(|command| command.role == MainVvPopupTextRole::RowPreview)
-                .map(|command| (command.text.as_str(), command.rect)),
-            Some(("row label", UiRect::new(52, 70, 370, 104)))
+                .map(|command| (command.text.as_str(), command.rect, command.size)),
+            Some(("row label", UiRect::new(40, 68, 372, 102), 12))
+        );
+
+        // T3: 命中行序号色提到 Text（其余属性不变）。
+        let highlighted =
+            layout.render_plan(UiRect::new(0, 0, 384, 114), &strings, "All", &items, Some(0));
+        assert_eq!(
+            highlighted
+                .text_commands
+                .iter()
+                .find(|command| command.role == MainVvPopupTextRole::RowIndex)
+                .map(|command| command.color),
+            Some(MainThemeRole::Text)
         );
     }
 

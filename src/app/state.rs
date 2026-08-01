@@ -364,6 +364,11 @@ pub(crate) struct AppState {
     pub(crate) vv_popup_replaces_ime: bool,
     pub(crate) vv_popup_group_id: i64,
     pub(super) vv_popup_items: Vec<VvPopupEntry>,
+    /// VV 弹窗当前鼠标悬停行（None 表示未悬停在任何行上），用于命中行序号高亮。
+    pub(crate) vv_popup_hover_row: Option<usize>,
+    /// 主窗口本帧渲染出的缩略图命中矩形（客户区物理像素），
+    /// 元素为 `(行索引, 矩形)`，是缩略图放大命中判定的单一真源（T4）。
+    pub(super) row_preview_rects: Vec<(i32, UiRect)>,
     pub(crate) paste_target_override: HWND,
     pub(crate) paste_backspace_count: u8,
     pub(crate) hotkey_passthrough_active: bool,
@@ -735,6 +740,8 @@ impl AppState {
             vv_popup_replaces_ime: false,
             vv_popup_group_id: 0,
             vv_popup_items: Vec::new(),
+            vv_popup_hover_row: None,
+            row_preview_rects: Vec::new(),
             paste_target_override: null_mut(),
             paste_backspace_count: 0,
             hotkey_passthrough_active: false,

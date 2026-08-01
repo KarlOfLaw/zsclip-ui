@@ -36,20 +36,16 @@ pub(super) fn row_supports_image_preview(item: &ClipItem, settings: &AppSettings
         && (item.kind == ClipKind::Image || image_file_preview_path(item).is_some())
 }
 
-/// 计算指定行内图片预览缩略图的矩形区域，用于命中测试。
-/// 逻辑与 `MainListLayout::row_content_plan` 中 preview_rect 的计算保持一致。
-pub(super) fn compute_row_preview_rect(state: &AppState, visible_idx: i32) -> Option<UiRect> {
-    let layout = state.layout();
-    let row = layout.row_rect(visible_idx, state.visible_count(), state.scroll_y)?;
-    let row_h = row.height();
-    let mut text_left = row.left + (row_h * 12 / 44).clamp(10, 20);
-    if let Some(icon) = layout.row_icon_rect(visible_idx, state.visible_count(), state.scroll_y) {
-        text_left = text_left.max(icon.right + (row_h * 12 / 44).clamp(10, 18));
-    }
-    let size = (row_h - 8).max(24);
-    let left = text_left + 2;
-    let top = row.top + (row_h - size) / 2;
-    Some(UiRect::new(left, top, left + size, top + size))
+/// 命中测试：给定主窗口客户区物理像素坐标 `(x, y)`，返回其所落缩略图对应的行索引。
+///
+/// 命中矩形来自渲染阶段实际绘制并写入 `state.row_preview_rects` 的真源
+/// （T4，A-04：消除旧 `compute_row_preview_rect` 与渲染不同步产生的幽灵热区）。
+pub(super) fn row_preview_hit(state: &AppState, x: i32, y: i32) -> Option<i32> {
+    state
+        .row_preview_rects
+        .iter()
+        .find(|(_, rect)| rect.contains(x, y))
+        .map(|(index, _)| *index)
 }
 
 pub(super) fn scroll_to_top_visible(state: &AppState) -> bool {

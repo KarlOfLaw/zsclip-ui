@@ -94,6 +94,12 @@ pub(super) unsafe fn handle_mouse_move(hwnd: HWND, position: UiPoint) {
             hide_hover_preview();
         }
 
+        // T6.1: 悬浮放大预览激活时，鼠标离开缩略图矩形区 → 立即关闭放大窗，
+        // 无需等待 WM_MOUSEHOVER 超时或 row_changed。
+        if hover_zoom_active() && row_preview_hit(state, x, y).is_none() {
+            hide_hover_preview();
+        }
+
         if hover.target_changed {
             repaint_main_window(hwnd, false);
         }

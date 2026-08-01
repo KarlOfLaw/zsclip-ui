@@ -134,6 +134,30 @@ pub(crate) unsafe fn create_scaled_font_for_hdc(
     }
 }
 
+/// 量取给定字族/逻辑字号/字重在 `hdc`（含其 DPI）下的单行文本物理行高，
+/// 定义为 `tmHeight + tmExternalLeading`。用于 VV 布局的字体度量自适应。
+///
+/// 返回 `None` 表示 HDC 无效或度量失败，调用方需回退到硬编码基线。
+/// 字体来自全局 `SCALED_FONT_CACHE`，**不得**在此处 `DeleteObject`。
+pub(crate) unsafe fn measure_ui_text_line_height(
+    hdc: *mut c_void,
+    family: &str,
+    size: i32,
+    weight: i32,
+) -> Option<i32> {
+    if hdc.is_null() {
+        return None;
+    }
+    let font = create_scaled_font_for_hdc(hdc, family, size, weight);
+    if font.is_null() {
+        return None;
+    }
+    let old = platform_gdi::select_object(hdc as _, font as _);
+    let metrics = platform_gdi::get_text_metrics(hdc as _);
+    platform_gdi::select_object(hdc as _, old);
+    metrics.map(|(height, external_leading)| (height + external_leading).max(1))
+}
+
 pub(crate) unsafe fn create_font_px(family: &str, pixel_size: i32, weight: i32) -> *mut c_void {
     platform_gdi::create_font_w(
         -pixel_size.max(1),

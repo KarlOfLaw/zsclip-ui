@@ -36,19 +36,19 @@ unsafe fn refresh_hover_preview(hwnd: HWND, state: &mut AppState, x: i32, y: i32
         return;
     };
 
-    let is_image = matches!(item_summary.kind, ClipKind::Image);
+    // 该行是否绘制了行内缩略图（图片条目与图片文件条目均可能命中）。
+    // row_preview_rects 是渲染时落盘的单一真源，天然携带 row_supports_image_preview
+    // + image_thumb_failed 的过滤结果（A-04 幽灵热区随之消失）。
+    let row_has_thumb = state
+        .row_preview_rects
+        .iter()
+        .any(|(idx, _)| *idx == state.hover_idx);
 
-    // 图片缩略图放大预览：独立于通用 hover_preview 开关，
-    // 仅由 image_zoom_preview_enabled 控制。当鼠标悬停在行内图片缩略图上时，
-    // 显示接近原尺寸的图片预览，移开后即消失。
+    // 图片缩略图放大预览：独立于通用 hover_preview 开关，仅由 image_zoom_preview_enabled 控制。
+    // 命中判定改用渲染时落盘的 preview_rect 单一真源；去掉 is_image 条件后，图片文件条目
+    // （ClipKind::Files 指向图片）同样可以放大查看（A-05）。
     let zoom = state.settings.image_zoom_preview_enabled
-        && is_image
-        && compute_row_preview_rect(state, state.hover_idx)
-            .map(|rc| {
-                let rc: RECT = rc.into();
-                pt_in_rect(x, y, &rc)
-            })
-            .unwrap_or(false);
+        && row_preview_hit(state, x, y) == Some(state.hover_idx);
 
     if zoom {
         show_hover_preview(&item_summary, win_rc.left + x, win_rc.top + y, true);
@@ -56,13 +56,13 @@ unsafe fn refresh_hover_preview(hwnd: HWND, state: &mut AppState, x: i32, y: i32
     }
 
     // 通用 hover 预览（文本/文件/图片），仍受 hover_preview 开关控制。
-    // 当图片放大预览开启时，图片行仅在缩略图上才放大显示，
-    // 其余区域不再显示通用小预览，以保证「移开缩略图即消失」的预期行为。
     if !state.settings.hover_preview {
         hide_hover_preview();
         return;
     }
-    if is_image && state.settings.image_zoom_preview_enabled {
+    // 缩略图行在放大预览开启时，仅在缩略图上放大显示，其余区域不再显示通用小预览，
+    // 以保证「移开缩略图即消失」的预期行为（图片条目与图片文件条目一致）。
+    if row_has_thumb && state.settings.image_zoom_preview_enabled {
         hide_hover_preview();
         return;
     }

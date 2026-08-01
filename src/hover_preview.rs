@@ -233,15 +233,36 @@ unsafe fn preview_hwnd() -> HWND {
     raw as HWND
 }
 
+// 放大预览窗的固定装饰尺寸（客户区外的边框/标题留白），与 WM_PAINT 内容矩形一致。
+const ZOOM_CHROME_W: i32 = 24; // 左右内边距
+const ZOOM_CHROME_H: i32 = 52; // 顶部 header 40 + 底部 12
+const ZOOM_MIN_W: i32 = 240;
+const ZOOM_MIN_H: i32 = 180;
+
+/// 计算图片放大预览窗尺寸（物理像素，PMv2 下 1:1，不做 DPI 换算）。
+///
+/// 采用整数等比收缩「只缩不放」：窗口内容区宽高比严格等于图片宽高比，
+/// 消除旧算法固定加常量导致的左右空白死区（A-06）。
 fn image_zoom_window_size(image_width: usize, image_height: usize, work_area: &RECT) -> (i32, i32) {
-    // 放大预览的目标尺寸贴近图片原尺寸（绘制时以 1.0 为上限、不放大），
-    // 仅在大到超出工作区 80% 时才按比例收缩，从而「接近原尺寸查看」。
-    // 不再以 PREVIEW_W_IMAGE / PREVIEW_H_IMAGE 为下限，否则小图与通用预览无异。
-    let max_w = ((work_area.right - work_area.left) * 8 / 10).max(320);
-    let max_h = ((work_area.bottom - work_area.top) * 8 / 10).max(320);
-    let w = (image_width as i32 + 24).max(200).min(max_w);
-    let h = (image_height as i32 + 52).max(160).min(max_h);
-    (w, h)
+    // A-09: 尺寸缺失（历史条目 / LAN 同步条目 image_width==0）时退回普通图片预览尺寸，
+    //       绝不能落到比普通预览还小的退化尺寸。
+    if image_width == 0 || image_height == 0 {
+        return (PREVIEW_W_IMAGE, PREVIEW_H_IMAGE);
+    }
+    let avail_w = ((work_area.right - work_area.left) * 8 / 10 - ZOOM_CHROME_W).max(ZOOM_MIN_W);
+    let avail_h = ((work_area.bottom - work_area.top) * 8 / 10 - ZOOM_CHROME_H).max(ZOOM_MIN_H);
+
+    // A-06: 等比收缩，只缩不放。scale_num 三项取最小分别对应
+    // 「宽度受限」「高度受限」「原图更小不放大」。用 i64 避免中间乘积溢出。
+    let (iw, ih) = (image_width as i64, image_height as i64);
+    let scale_num = (avail_w as i64 * ih).min(avail_h as i64 * iw).min(iw * ih);
+    let w = ((scale_num / ih.max(1)) as i32).max(1);
+    let h = ((scale_num / iw.max(1)) as i32).max(1);
+
+    (
+        (w + ZOOM_CHROME_W).max(ZOOM_MIN_W),
+        (h + ZOOM_CHROME_H).max(ZOOM_MIN_H),
+    )
 }
 
 fn limit_preview_text(text: &str, max_lines: usize, max_chars: usize) -> String {
@@ -337,6 +358,17 @@ pub(crate) unsafe fn hide_hover_preview() {
         }
         platform_window::hide(hwnd);
     }
+}
+
+/// 当前是否存在"瞬态"放大预览（zoom_mode 且可见）。
+/// 供 handle_mouse_move 的即时收起判定使用。
+pub(crate) unsafe fn hover_zoom_active() -> bool {
+    let hwnd = preview_hwnd();
+    if !platform_window::exists(hwnd) {
+        return false;
+    }
+    let ptr = platform_window::user_data(hwnd) as *mut HoverPreviewData;
+    !ptr.is_null() && (*ptr).zoom_mode && platform_window::is_visible(hwnd)
 }
 
 fn spawn_hover_image_load(hwnd: HWND, item: ClipItem) {
@@ -442,11 +474,13 @@ pub(crate) unsafe fn show_hover_preview(
 
     let data = &mut *ptr;
     let same_image_shape = image_shape == Some((data.image_width, data.image_height));
-    let same_content = data.item_id == item.id
+    // 除 zoom_mode 外的内容是否完全相同。header/body/image_shape 都由 item 派生，
+    // 因此该标志为真 ⟺ 仍是同一条目（A-14：据此复用已解码位图）。
+    let same_content_ignoring_zoom = data.item_id == item.id
         && data.header == header
         && data.body == body
-        && same_image_shape
-        && data.zoom_mode == zoom;
+        && same_image_shape;
+    let same_content = same_content_ignoring_zoom && data.zoom_mode == zoom;
     let same_geometry =
         data.last_x == x && data.last_y == y && data.last_w == w && data.last_h == h;
     let visible = platform_window::is_visible(hwnd);
@@ -469,6 +503,28 @@ pub(crate) unsafe fn show_hover_preview(
             h,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
+        return;
+    }
+
+    // A-14：同一条目、仅 zoom_mode 切换（悬浮小预览 <-> 放大查看）。
+    // 绝不能重置 data.image / loading_item_id —— 那会丢弃已解码位图并触发无谓重载。
+    // 只更新几何与模式，复用现有位图并重绘。
+    if visible && same_content_ignoring_zoom {
+        data.last_x = x;
+        data.last_y = y;
+        data.last_w = w;
+        data.last_h = h;
+        data.zoom_mode = zoom;
+        platform_window::set_pos(
+            hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            w,
+            h,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        platform_gdi::invalidate_rect(hwnd, null(), 0);
         return;
     }
 
@@ -515,7 +571,76 @@ pub(crate) unsafe fn show_hover_preview(
 
 #[cfg(test)]
 mod tests {
-    use super::{limit_preview_text, PREVIEW_TEXT_MAX_CHARS, PREVIEW_TEXT_MAX_LINES};
+    use super::{
+        image_zoom_window_size, limit_preview_text, PREVIEW_H_IMAGE, PREVIEW_TEXT_MAX_CHARS,
+        PREVIEW_TEXT_MAX_LINES, PREVIEW_W_IMAGE,
+    };
+    use windows_sys::Win32::Foundation::RECT;
+
+    /// 1920×1080 工作区：avail_w=(1536-24).max(240)=1512，avail_h=(864-52).max(180)=812。
+    fn work_area_1080p() -> RECT {
+        RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        }
+    }
+
+    #[test]
+    fn image_zoom_size_keeps_aspect_ratio_for_large_image() {
+        // 4000×3000（高度受限）：scale_num=min(1512*3000, 812*4000, 4000*3000)=3_248_000
+        // w=3_248_000/3000=1082, h=3_248_000/4000=812 → 加 chrome (24,52) → (1106, 864)。
+        assert_eq!(
+            image_zoom_window_size(4000, 3000, &work_area_1080p()),
+            (1106, 864)
+        );
+    }
+
+    #[test]
+    fn image_zoom_size_is_one_to_one_for_small_image() {
+        // 800×600（原图更小，只缩不放）：scale_num=min(907200, 649600, 480000)=480_000
+        // w=480_000/600=800, h=480_000/800=600 → 加 chrome → (824, 652)，即 1:1 原尺寸。
+        assert_eq!(
+            image_zoom_window_size(800, 600, &work_area_1080p()),
+            (824, 652)
+        );
+    }
+
+    #[test]
+    fn image_zoom_size_lifts_tiny_image_to_minimum() {
+        // 100×100：内容 100×100 + chrome=(124,152)，低于 (ZOOM_MIN_W,ZOOM_MIN_H)=(240,180)
+        // → 最终 max 钳位抬升到 (240, 180)。
+        // （审计正文示例写 124×152 漏算了末行的 min 钳位，此处以代码语义为准。）
+        assert_eq!(
+            image_zoom_window_size(100, 100, &work_area_1080p()),
+            (240, 180)
+        );
+    }
+
+    #[test]
+    fn image_zoom_size_handles_panorama() {
+        // 4000×400（宽度受限）：scale_num=min(1512*400, 812*4000, 4000*400)=604_800
+        // w=604_800/400=1512, h=604_800/4000=151 → 加 chrome → (1536, 203)。
+        assert_eq!(
+            image_zoom_window_size(4000, 400, &work_area_1080p()),
+            (1536, 203)
+        );
+    }
+
+    #[test]
+    fn image_zoom_size_falls_back_when_dimensions_missing() {
+        // A-09：image_width/height==0（历史条目 / LAN 同步条目）→ 退回普通图片预览尺寸，
+        // 绝不缩到比普通预览更小。
+        assert_eq!(
+            image_zoom_window_size(0, 0, &work_area_1080p()),
+            (PREVIEW_W_IMAGE, PREVIEW_H_IMAGE)
+        );
+        assert_eq!(
+            image_zoom_window_size(1920, 0, &work_area_1080p()),
+            (PREVIEW_W_IMAGE, PREVIEW_H_IMAGE)
+        );
+    }
 
     #[test]
     fn text_preview_capacity_matches_text_window() {
