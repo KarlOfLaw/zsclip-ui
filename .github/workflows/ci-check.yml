@@ -1,0 +1,195 @@
+name: CI Check
+
+# 编译与回归门禁。
+#
+# 存在理由（务必阅读后再改动本文件）：
+# 本仓库的 Windows 实现（`src/app/**`，含 vv_popup.rs 等约 250 个文件）位于
+# `#[cfg(target_os = "windows")] mod app;` 之下。在本 workflow 加入之前：
+#   - build-windows-exe.yml  仅 workflow_dispatch，PR 不触发；
+#   - native-hosts.yml       只跑 macOS / Linux，且命令是 `cargo check --bin zsclip`
+#                            （不含 --all-targets，测试代码不参与编译），并设置
+#                            RUSTFLAGS: -A warnings 抑制全部告警；
+#   - release-packages.yml   push 到 main 才触发 —— 那时坏代码已经进主干了，
+#                            且是 --release 构建，debug_assert! 不生效。
+# 结果：Windows 专属代码在合入前从未被任何 CI 任务编译过，仓库里 753 个
+# #[test] 也从未在任何地方运行过。commit 1992ae6 带着 UiRect -> RECT 类型
+# 不匹配的编译错误进入主干、由 e2b5388 事后补救，即为此缺口的直接后果。
+#
+# 因此本 workflow 的硬门禁跑在 windows-latest 上，且必须包含 --all-targets
+# （编译测试代码）与 cargo test（debug 构建，debug_assert! 生效）。
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# 不设置 paths 过滤：这是编译门禁，任何改动都应当重新验证。
+# 若将本 workflow 设为分支保护的 required check，paths 过滤会导致被跳过的
+# 运行永远停留在 pending，反而卡死 PR。
+
+permissions:
+  contents: read
+
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_TERM_COLOR: always
+
+# 同一分支上新的推送会取消尚未完成的旧运行，避免 Windows runner 排队堆积。
+concurrency:
+  group: ci-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 硬门禁：失败即阻止合入。
+  # ---------------------------------------------------------------------------
+  windows-check:
+    name: Windows ${{ matrix.name }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: pwsh
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 当前 Cargo.toml 中 default 恰好等于全部 6 个 feature，故这两档
+          # 目前编译产物相同；保留两档是为了将来新增非 default feature 时
+          # 矩阵已经就位，不必再改 workflow。
+          - name: default features
+            features: ""
+            cache_key: default
+          - name: all features
+            features: "--all-features"
+            cache_key: all-features
+
+    steps:
+      - name: Checkout ZSClip
+        uses: actions/checkout@v5
+
+      # zsui 是 Cargo.toml 里的 path 依赖（zsui = { path = "../zsui" }），
+      # 必须按 zsui-revision.txt 固定的 revision 检出到仓库同级目录，
+      # 否则 cargo 连依赖都无法解析。步骤与其余 workflow 保持一致。
+      - name: Checkout the matching ZSUI revision
+        run: |
+          $revision = (Get-Content zsui-revision.txt -Raw).Trim()
+          git init ../zsui
+          git -C ../zsui remote add origin https://github.com/qiu7824/zsui
+          git -C ../zsui fetch --depth 1 origin $revision
+          git -C ../zsui checkout --detach FETCH_HEAD
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          # 不同 feature 组合产物不同，分开缓存避免互相顶掉。
+          key: ${{ matrix.cache_key }}
+          # 门禁失败时也保存缓存，否则「一直红」的分支每次都要全量重编。
+          cache-on-failure: true
+
+      # --all-targets 让测试代码 / benches 也参与编译。这一点至关重要：
+      # native-hosts.yml 用的 `--bin zsclip` 不编译测试代码，所以测试里的
+      # 编译错误此前完全不可见。
+      - name: cargo check --all-targets
+        run: cargo check --all-targets --locked ${{ matrix.features }}
+
+      # cargo test 默认 debug 构建，debug_assert!/debug_assert_eq! 生效。
+      # 例如 src/app/vv_popup.rs 中 native_host_vv_select_specs 的长度与
+      # index 断言，只有在 debug 构建下才有意义 —— release 打包流程测不到。
+      - name: cargo test
+        run: cargo test --locked ${{ matrix.features }}
+
+  # ---------------------------------------------------------------------------
+  # 软门禁：--no-default-features。
+  # 该组合从未被验证过，直接设为硬门禁很可能一上来就是红的，反而逼着后来者
+  # 删检查。先以 continue-on-error 方式收集真实结果，待清理干净后再收紧
+  # （届时把 continue-on-error 整行删掉即可）。
+  # ---------------------------------------------------------------------------
+  windows-no-default-features:
+    name: Windows no-default-features (soft)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    continue-on-error: true
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout ZSClip
+        uses: actions/checkout@v5
+
+      - name: Checkout the matching ZSUI revision
+        run: |
+          $revision = (Get-Content zsui-revision.txt -Raw).Trim()
+          git init ../zsui
+          git -C ../zsui remote add origin https://github.com/qiu7824/zsui
+          git -C ../zsui fetch --depth 1 origin $revision
+          git -C ../zsui checkout --detach FETCH_HEAD
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: no-default-features
+          cache-on-failure: true
+
+      - name: cargo check --no-default-features
+        run: cargo check --all-targets --locked --no-default-features
+
+  # ---------------------------------------------------------------------------
+  # 软门禁：clippy。
+  #
+  # 为什么不是硬门禁：存量代码有明确的告警债务 —— native-hosts.yml 全程设置
+  # RUSTFLAGS: -A warnings 主动屏蔽告警，src/ 下另有 115 处 #[allow(...)]。
+  # 在这样的基线上直接 `-D warnings` 几乎必然大面积飘红，而一个永远无法通过
+  # 的门禁最终一定会被人删掉或加 --no-verify 绕过，结果比没有更糟。
+  #
+  # 现行约定：**存量告警待清理，新代码不得引入新告警**。
+  # Reviewer 应当查看本 job 的输出，对比 PR 前后告警数量；只要是本次改动引入
+  # 的 clippy 告警，就要求在合入前修掉。
+  # 存量告警清零后，删除 continue-on-error 即可升级为硬门禁。
+  # ---------------------------------------------------------------------------
+  clippy:
+    name: Clippy (soft - 存量告警待清理，新代码不得引入)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    continue-on-error: true
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout ZSClip
+        uses: actions/checkout@v5
+
+      - name: Checkout the matching ZSUI revision
+        run: |
+          $revision = (Get-Content zsui-revision.txt -Raw).Trim()
+          git init ../zsui
+          git -C ../zsui remote add origin https://github.com/qiu7824/zsui
+          git -C ../zsui fetch --depth 1 origin $revision
+          git -C ../zsui checkout --detach FETCH_HEAD
+
+      - name: Install stable Rust with clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+          cache-on-failure: true
+
+      - name: cargo clippy -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings

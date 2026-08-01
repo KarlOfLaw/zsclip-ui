@@ -233,6 +233,21 @@ cargo run
 cargo build --release
 ```
 
+### 提交前必读：开发门禁
+
+本仓库的 Windows 实现位于 `#[cfg(target_os = "windows")] mod app;` 之下，
+在 macOS / Linux 上不参与编译。**本地没有 Rust 工具链（`cargo` / `rustc` 不可用）时，
+禁止直推 `main`，必须走 Pull Request 并等 CI 绿灯。**
+
+推送前自查：
+
+```powershell
+cargo check --all-targets --locked
+cargo test --locked
+```
+
+完整规则、CI 检查矩阵与分支保护建议见 [docs/dev-gate.md](docs/dev-gate.md)。
+
 ## 项目结构
 
 项目正在按“后续方便移植”的方向整理，主入口逐步收口到这几层：
